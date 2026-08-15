@@ -149,11 +149,16 @@
     border-radius: var(--radius);
     padding: 10px 11px;
     margin-bottom: 8px;
+    cursor: pointer;
     transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .node:hover:not(.active){
+    border-color: var(--text-faint);
   }
   .node.active{
     border-color: var(--relay-green);
     box-shadow: 0 0 0 1px var(--relay-green-dim);
+    cursor: default;
   }
   .node.exhausted{ opacity: 0.55; }
   .node.error{ border-color: var(--danger); }
@@ -860,6 +865,14 @@
 
   // ---------- Rendering ----------
 
+  function setActiveNode(i){
+    if (sending || !nodes[i] || i === activeIndex) return;
+    activeIndex = i;
+    if (nodes[i].status === 'error' || nodes[i].status === 'exhausted') nodes[i].status = 'queued';
+    renderNodes();
+    saveNodes();
+  }
+
   function renderNodes(){
     nodeList.innerHTML = '';
     chainCount.textContent = nodes.length ? nodes.length + ' AI' + (nodes.length > 1 ? "'s" : '') : '';
@@ -867,10 +880,10 @@
       const el = document.createElement('div');
       el.className = 'node' + (i === activeIndex ? ' active' : '') + (node.status === 'exhausted' ? ' exhausted' : '') + (node.status === 'error' ? ' error' : '');
       const statusText = i === activeIndex ? 'actief — bezig met gesprek'
-        : node.status === 'exhausted' ? 'contextlimiet bereikt'
-        : node.status === 'error' ? 'fout opgetreden'
-        : node.status === 'done' ? 'klaar voor gebruik'
-        : 'in de wachtrij';
+        : node.status === 'exhausted' ? 'contextlimiet bereikt — klik om toch te gebruiken'
+        : node.status === 'error' ? 'fout opgetreden — klik om opnieuw te proberen'
+        : 'klik om deze AI te gebruiken';
+      el.title = i === activeIndex ? '' : 'Klik om over te schakelen naar ' + node.name;
       el.innerHTML = `
         <div class="node-connector"></div>
         <div class="node-top">
@@ -888,13 +901,26 @@
           </span>
         </div>
       `;
-      el.querySelector('[data-act="up"]').onclick = () => moveNode(i, -1);
-      el.querySelector('[data-act="down"]').onclick = () => moveNode(i, 1);
-      el.querySelector('[data-act="edit"]').onclick = () => openModal(node);
+      el.querySelector('[data-act="up"]').onclick = (e) => { e.stopPropagation(); moveNode(i, -1); };
+      el.querySelector('[data-act="down"]').onclick = (e) => { e.stopPropagation(); moveNode(i, 1); };
+      el.querySelector('[data-act="edit"]').onclick = (e) => { e.stopPropagation(); openModal(node); };
+      if (i !== activeIndex) {
+        el.addEventListener('click', () => setActiveNode(i));
+      }
       nodeList.appendChild(el);
     });
     updateComposerState();
     updateActiveBadge();
+    updateEmptyState();
+  }
+
+  function updateEmptyState(){
+    if (nodes.length > 0) {
+      const extra = nodes.length > 1 ? ` (met ${nodes.length - 1} back-up${nodes.length - 1 > 1 ? 's' : ''} in de ketting)` : '';
+      emptyState.innerHTML = `<div class="empty-state-mark">◇</div><p>Typ hieronder je eerste bericht om te beginnen. Je gebruikt <strong>${escapeHtml(nodes[0].name)}</strong>${extra}.</p>`;
+    } else {
+      emptyState.innerHTML = `<div class="empty-state-mark">◇</div><p>Nog geen AI ingesteld. Klik links op <strong>"AI toevoegen aan de ketting"</strong>, vul een API-key en model in, en begin het gesprek. Voeg gerust meerdere AI's toe — Relay schakelt automatisch door als de actieve AI zijn contextlimiet bereikt.</p>`;
+    }
   }
 
   function updateActiveBadge(){
@@ -912,10 +938,14 @@
 
   function updateComposerState(){
     const ready = nodes.length > 0 && !sending;
+    const wasDisabled = input.disabled;
     input.disabled = !ready;
     sendBtn.disabled = !ready || !input.value.trim();
-    if (nodes.length && emptyState.parentElement) {
-      // keep empty state until first message sent; handled in addMessage
+    if (ready && wasDisabled) {
+      // Het veld verloor de focus toen het disabled werd tijdens het
+      // versturen — die krijgt de browser niet vanzelf terug, dus
+      // zetten we 'm hier expliciet terug op het invoerveld.
+      input.focus();
     }
   }
 
