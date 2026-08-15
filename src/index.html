@@ -144,11 +144,15 @@
   .sidebar.chain-collapsed .chain-section{ flex: 0 0 auto; overflow:visible; }
 
   .chain-toggle-btn{
-    background:none; border:none; color: var(--text-faint);
-    padding:2px 4px; border-radius:5px; line-height:1; font-size:11px;
-    transition: transform .2s ease, color .15s ease;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding:4px; border-radius:6px; line-height:1; font-size:15px;
+    width:24px; height:24px;
+    display:flex; align-items:center; justify-content:center;
+    transition: transform .2s ease, color .15s ease, border-color .15s ease;
   }
-  .chain-toggle-btn:hover{ color: var(--text); background: var(--border-soft); }
+  .chain-toggle-btn:hover{ color: var(--text); border-color: var(--text-faint); }
   .chain-toggle-btn.collapsed{ transform: rotate(-90deg); }
 
   .chain-body-wrap{
