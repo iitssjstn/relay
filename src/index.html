@@ -497,7 +497,35 @@
 </head>
 <body>
 
-<div class="app">
+<div class="modal-overlay" id="authOverlay" style="display:flex;">
+  <div class="modal" style="max-width:380px;">
+    <h2 id="authTitle">Inloggen</h2>
+    <div class="modal-sub" id="authSub">Log in om verder te gaan met je gesprekken.</div>
+
+    <div id="authError" style="display:none; background:var(--danger-dim); border:1px solid var(--danger); color:var(--danger); border-radius:8px; padding:8px 11px; font-size:12.5px; margin-bottom:14px;"></div>
+
+    <div class="field">
+      <label>Gebruikersnaam</label>
+      <input id="authUsername" type="text" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Wachtwoord</label>
+      <input id="authPassword" type="password" autocomplete="current-password">
+    </div>
+    <div class="field" id="authCodeField" style="display:none;">
+      <label>Registratiecode</label>
+      <input id="authCode" type="password">
+      <div class="field-hint">Vraag deze code aan de beheerder van dit Relay-exemplaar.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="authSubmitBtn" style="flex:1;">Inloggen</button>
+    </div>
+    <button class="btn-danger-text" id="authToggleBtn" style="color:var(--text-dim); width:100%; text-align:center;">Nog geen account? Account aanmaken</button>
+  </div>
+</div>
+
+<div class="app" id="appRoot" style="display:none;">
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-mark"><span class="brand-dot"></span>Relay</div>
@@ -514,10 +542,19 @@
       <div id="nodeList"></div>
       <button class="add-node-btn" id="addNodeBtn">+ AI toevoegen aan de ketting</button>
     </div>
-    <div class="sidebar-footer">
-      <button class="ghost-btn" id="exportBtn">Exporteer config</button>
-      <button class="ghost-btn" id="importBtn">Importeer config</button>
-      <input type="file" id="importFile" accept="application/json" style="display:none">
+    <div class="sidebar-footer" style="flex-direction:column; gap:8px;">
+      <div style="display:flex; gap:8px; width:100%;">
+        <button class="ghost-btn" id="exportBtn">Exporteer config</button>
+        <button class="ghost-btn" id="importBtn">Importeer config</button>
+        <input type="file" id="importFile" accept="application/json" style="display:none">
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; width:100%; padding-top:4px; border-top:1px solid var(--border-soft);">
+        <span id="authUserLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-top:8px;"></span>
+        <div style="display:flex; gap:6px;">
+          <button class="ghost-btn" id="adminBtn" style="display:none; flex:none; padding:6px 10px; margin-top:8px;">Beheer</button>
+          <button class="ghost-btn" id="logoutBtn" style="flex:none; padding:6px 10px; margin-top:8px;">Uitloggen</button>
+        </div>
+      </div>
     </div>
   </aside>
 
@@ -544,7 +581,7 @@
         <textarea id="input" rows="1" placeholder="Typ je vraag..." disabled></textarea>
         <button class="send-btn" id="sendBtn" disabled>↑</button>
       </div>
-      <div class="composer-hint">API-keys en gesprekken worden lokaal opgeslagen in je browser (localStorage) en rechtstreeks naar de gekozen AI-provider gestuurd — nooit naar een server van derden. Morgen verder kletsen kan gewoon door dit bestand weer te openen.</div>
+      <div class="composer-hint">API-keys en gesprekken worden bewaard bij jouw account op deze Relay-server, en je berichten gaan rechtstreeks naar de AI-provider die je zelf kiest. Log volgende keer gewoon in om verder te gaan.</div>
     </div>
   </main>
 </div>
@@ -587,7 +624,7 @@
         <input id="fKey" type="password" placeholder="sk-...">
         <button type="button" id="toggleKeyBtn">toon</button>
       </div>
-      <div class="field-hint">Wordt alleen client-side gebruikt om rechtstreeks met de provider te praten, en lokaal opgeslagen in de browseropslag van dit apparaat (localStorage) — niet naar een server van derden gestuurd. Gebruik dit dus niet op een gedeelde of publieke computer.</div>
+      <div class="field-hint">Wordt gebruikt om rechtstreeks met de provider te praten, en bewaard in de database van deze Relay-server, gekoppeld aan jouw account — nooit naar een andere server dan de provider zelf gestuurd.</div>
     </div>
 
     <div class="field-2col">
@@ -610,6 +647,33 @@
       <button class="btn btn-primary" id="modalSaveBtn">Opslaan</button>
     </div>
     <button class="btn-danger-text" id="modalDeleteBtn" style="display:none;">Deze AI verwijderen uit de ketting</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="adminOverlay" style="display:none;">
+  <div class="modal" style="max-width:440px;">
+    <h2>Beheer toegang</h2>
+    <div class="modal-sub">Bepaal wie een account kan aanmaken, en beheer bestaande accounts.</div>
+
+    <div class="field">
+      <label>Registratie</label>
+      <div id="adminAccessStatus" class="field-hint" style="margin-top:0; margin-bottom:10px;"></div>
+      <div class="key-row">
+        <input id="adminCodeInput" type="text" placeholder="Nieuwe registratiecode (min. 6 tekens)">
+        <button type="button" id="adminSetCodeBtn" class="btn btn-primary" style="flex:none; padding:0 14px;">Instellen</button>
+      </div>
+      <div id="adminCodeMsg" style="display:none; font-size:11.5px; margin-top:7px; line-height:1.4;"></div>
+      <button class="btn-danger-text" id="adminCloseRegBtn" style="display:none; padding:8px 0 0; text-align:left;">Registratie sluiten (geen nieuwe accounts meer)</button>
+    </div>
+
+    <div class="field" style="margin-top:18px;">
+      <label>Accounts</label>
+      <div class="conv-list" id="adminUserList" style="max-height:220px;"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="adminCloseBtn" style="flex:1;">Sluiten</button>
+    </div>
   </div>
 </div>
 
@@ -647,42 +711,45 @@
 
   function uid(){ return 'n' + Math.random().toString(36).slice(2, 9); }
 
-  // ---------- Local storage persistence ----------
-  const LS_NODES = 'relay_nodes';
-  const LS_CONV_INDEX = 'relay_conv_index';
-  const LS_CONV_PREFIX = 'relay_conv_';
-  const LS_LAST_OPEN = 'relay_last_open';
+  // ---------- Server-side persistence (per account) ----------
 
-  function safeGet(key){
-    try { return localStorage.getItem(key); } catch { return null; }
-  }
-  function safeSet(key, val){
-    try { localStorage.setItem(key, val); } catch { /* storage unavailable or full */ }
-  }
-  function safeRemove(key){
-    try { localStorage.removeItem(key); } catch { /* ignore */ }
+  async function apiFetch(path, options){
+    options = options || {};
+    const res = await fetch(path, {
+      method: options.method || 'GET',
+      headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      credentials: 'same-origin'
+    });
+    if (res.status === 401) {
+      showAuthScreen('login', 'Je sessie is verlopen. Log opnieuw in.');
+      throw new Error('unauthenticated');
+    }
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { const j = await res.json(); if (j.error) msg = j.error; } catch { /* ignore */ }
+      throw new Error(msg);
+    }
+    if (res.status === 204) return null;
+    return res.json();
   }
 
-  function saveNodes(){
-    safeSet(LS_NODES, JSON.stringify(nodes));
+  async function saveNodes(){
+    try { await apiFetch('/api/nodes', { method: 'PUT', body: { nodes, activeIndex } }); }
+    catch (e) { console.error('Instellingen opslaan mislukt:', e.message); }
   }
-  function loadNodes(){
-    const raw = safeGet(LS_NODES);
-    if (!raw) return;
+
+  async function loadNodesFromServer(){
     try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        nodes = parsed.map(n => ({ ...n, status: 'queued' }));
-      }
-    } catch { /* ignore corrupt data */ }
+      const data = await apiFetch('/api/nodes');
+      nodes = (data.nodes || []).map(n => ({ ...n, status: 'queued' }));
+      activeIndex = typeof data.activeIndex === 'number' ? data.activeIndex : (nodes.length ? 0 : -1);
+    } catch (e) { /* auth redirect already handled inside apiFetch */ }
   }
 
-  function loadConvIndex(){
-    const raw = safeGet(LS_CONV_INDEX);
-    try { convIndex = raw ? JSON.parse(raw) : []; } catch { convIndex = []; }
-  }
-  function saveConvIndex(){
-    safeSet(LS_CONV_INDEX, JSON.stringify(convIndex));
+  async function loadConvIndexFromServer(){
+    try { convIndex = await apiFetch('/api/conversations'); }
+    catch (e) { convIndex = []; }
   }
 
   function titleFromConversation(msgs){
@@ -692,44 +759,42 @@
     return t.length > 42 ? t.slice(0, 42) + '…' : t;
   }
 
-  function saveCurrentConversation(){
+  async function saveCurrentConversation(){
     if (!currentConvId || conversation.length === 0) return;
-    const meta = { id: currentConvId, title: titleFromConversation(conversation), updatedAt: Date.now() };
-    safeSet(LS_CONV_PREFIX + currentConvId, JSON.stringify({ ...meta, messages: conversation }));
-    const existingIdx = convIndex.findIndex(c => c.id === currentConvId);
-    if (existingIdx !== -1) convIndex[existingIdx] = meta; else convIndex.unshift(meta);
-    convIndex.sort((a, b) => b.updatedAt - a.updatedAt);
-    saveConvIndex();
-    safeSet(LS_LAST_OPEN, currentConvId);
-    renderConvList();
+    const title = titleFromConversation(conversation);
+    try {
+      const result = await apiFetch('/api/conversations/' + encodeURIComponent(currentConvId), {
+        method: 'PUT', body: { title, messages: conversation }
+      });
+      const meta = { id: currentConvId, title, updatedAt: result.updatedAt };
+      const idx = convIndex.findIndex(c => c.id === currentConvId);
+      if (idx !== -1) convIndex[idx] = meta; else convIndex.unshift(meta);
+      convIndex.sort((a, b) => b.updatedAt - a.updatedAt);
+      renderConvList();
+    } catch (e) { console.error('Gesprek opslaan mislukt:', e.message); }
   }
 
-  function loadConversationById(id){
-    const raw = safeGet(LS_CONV_PREFIX + id);
-    if (!raw) return false;
+  async function loadConversationById(id){
     try {
-      const data = JSON.parse(raw);
+      const data = await apiFetch('/api/conversations/' + encodeURIComponent(id));
       currentConvId = id;
       conversation = data.messages || [];
       renderFullConversation();
       nodes.forEach(n => n.status = 'queued');
       activeIndex = nodes.length ? 0 : -1;
-      safeSet(LS_LAST_OPEN, id);
       renderNodes();
       renderConvList();
       return true;
-    } catch { return false; }
+    } catch (e) { return false; }
   }
 
-  function deleteConversationById(id){
-    safeRemove(LS_CONV_PREFIX + id);
-    convIndex = convIndex.filter(c => c.id !== id);
-    saveConvIndex();
-    if (currentConvId === id) {
-      createNewConversation();
-    } else {
-      renderConvList();
-    }
+  async function deleteConversationById(id){
+    try {
+      await apiFetch('/api/conversations/' + encodeURIComponent(id), { method: 'DELETE' });
+      convIndex = convIndex.filter(c => c.id !== id);
+      if (currentConvId === id) createNewConversation();
+      else renderConvList();
+    } catch (e) { console.error('Verwijderen mislukt:', e.message); }
   }
 
   function createNewConversation(){
@@ -739,7 +804,6 @@
     messagesEl.appendChild(emptyState);
     nodes.forEach(n => n.status = 'queued');
     activeIndex = nodes.length ? 0 : -1;
-    safeSet(LS_LAST_OPEN, currentConvId);
     renderNodes();
     renderConvList();
   }
@@ -1235,18 +1299,213 @@
     }
   }
 
-  // init
-  loadNodes();
-  loadConvIndex();
-  const lastOpen = safeGet(LS_LAST_OPEN);
-  if (lastOpen && convIndex.some(c => c.id === lastOpen)) {
-    loadConversationById(lastOpen);
-  } else {
-    currentConvId = uid();
-    activeIndex = nodes.length ? 0 : -1;
-    renderConvList();
+  // ---------- Auth screen ----------
+
+  const authOverlay = $('authOverlay');
+  const appRoot = $('appRoot');
+  let authMode = 'login';
+  let isBootstrap = false;
+
+  async function checkBootstrap(){
+    try {
+      const res = await fetch('/api/auth/bootstrap-status', { credentials: 'same-origin' });
+      const data = await res.json();
+      isBootstrap = !!data.bootstrap;
+    } catch { isBootstrap = false; }
+    return isBootstrap;
   }
-  renderNodes();
+
+  async function showAuthScreen(mode, message){
+    authMode = mode || 'login';
+    if (authMode === 'register') await checkBootstrap();
+
+    const firstRun = authMode === 'register' && isBootstrap;
+    $('authTitle').textContent = authMode === 'login' ? 'Inloggen' : (firstRun ? 'Welkom bij Relay' : 'Account aanmaken');
+    $('authSub').textContent = authMode === 'login'
+      ? 'Log in om verder te gaan met je gesprekken.'
+      : firstRun
+        ? 'Dit is het eerste account op dit Relay-exemplaar — het wordt automatisch beheerder. Daarna kun je zelf een registratiecode instellen voor anderen.'
+        : 'Vraag de registratiecode aan de beheerder van dit Relay-exemplaar.';
+    $('authSubmitBtn').textContent = authMode === 'login' ? 'Inloggen' : (firstRun ? 'Beheerdersaccount aanmaken' : 'Account aanmaken');
+    $('authToggleBtn').style.display = firstRun ? 'none' : 'block';
+    $('authToggleBtn').textContent = authMode === 'login' ? 'Nog geen account? Account aanmaken' : 'Al een account? Inloggen';
+    $('authCodeField').style.display = (authMode === 'register' && !firstRun) ? 'block' : 'none';
+    const errEl = $('authError');
+    if (message) { errEl.textContent = message; errEl.style.display = 'block'; }
+    else { errEl.style.display = 'none'; }
+    authOverlay.style.display = 'flex';
+    appRoot.style.display = 'none';
+  }
+
+  function hideAuthScreen(username, isAdmin){
+    authOverlay.style.display = 'none';
+    appRoot.style.display = 'grid';
+    $('authUserLabel').textContent = username ? '@' + username : '';
+    $('adminBtn').style.display = isAdmin ? 'block' : 'none';
+  }
+
+  $('authToggleBtn').addEventListener('click', () => {
+    showAuthScreen(authMode === 'login' ? 'register' : 'login');
+  });
+
+  $('authSubmitBtn').addEventListener('click', submitAuthForm);
+  [$('authUsername'), $('authPassword'), $('authCode')].forEach(el => {
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuthForm(); });
+  });
+
+  async function submitAuthForm(){
+    const username = $('authUsername').value.trim();
+    const password = $('authPassword').value;
+    const registrationCode = $('authCode').value;
+    if (!username || !password) {
+      showAuthScreen(authMode, 'Vul gebruikersnaam en wachtwoord in.');
+      return;
+    }
+    $('authSubmitBtn').disabled = true;
+    try {
+      const path = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      const body = authMode === 'login' ? { username, password } : { username, password, registrationCode };
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'same-origin'
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAuthScreen(authMode, data.error || 'Er ging iets mis.');
+        return;
+      }
+      $('authPassword').value = '';
+      $('authCode').value = '';
+      await startApp(data.username, data.isAdmin);
+    } catch (e) {
+      showAuthScreen(authMode, 'Kon geen verbinding maken met de server.');
+    } finally {
+      $('authSubmitBtn').disabled = false;
+    }
+  }
+
+  $('logoutBtn').addEventListener('click', async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* ignore */ }
+    nodes = []; activeIndex = -1; conversation = []; convIndex = []; currentConvId = null;
+    showAuthScreen('login');
+  });
+
+  async function startApp(username, isAdmin){
+    hideAuthScreen(username, isAdmin);
+    await loadNodesFromServer();
+    await loadConvIndexFromServer();
+    if (convIndex.length > 0) {
+      await loadConversationById(convIndex[0].id);
+    } else {
+      currentConvId = uid();
+      renderConvList();
+    }
+    renderNodes();
+  }
+
+  // ---------- Admin panel ----------
+
+  const adminOverlay = $('adminOverlay');
+
+  $('adminBtn').addEventListener('click', openAdminModal);
+  $('adminCloseBtn').addEventListener('click', () => { adminOverlay.style.display = 'none'; });
+  adminOverlay.addEventListener('click', (e) => { if (e.target === adminOverlay) adminOverlay.style.display = 'none'; });
+
+  async function openAdminModal(){
+    adminOverlay.style.display = 'flex';
+    $('adminCodeInput').value = '';
+    $('adminCodeMsg').style.display = 'none';
+    await refreshAdminAccessStatus();
+    await refreshAdminUsers();
+  }
+
+  async function refreshAdminAccessStatus(){
+    try {
+      const data = await apiFetch('/api/admin/access');
+      $('adminAccessStatus').textContent = data.registrationOpen
+        ? 'Registratie staat open — nieuwe accounts kunnen worden aangemaakt met de huidige code.'
+        : 'Registratie is gesloten — er is nog geen registratiecode ingesteld.';
+      $('adminCloseRegBtn').style.display = data.registrationOpen ? 'block' : 'none';
+    } catch (e) { $('adminAccessStatus').textContent = 'Kon status niet ophalen.'; }
+  }
+
+  async function refreshAdminUsers(){
+    try {
+      const users = await apiFetch('/api/admin/users');
+      const list = $('adminUserList');
+      list.innerHTML = '';
+      users.forEach(u => {
+        const row = document.createElement('div');
+        row.className = 'conv-item';
+        row.style.cursor = 'default';
+        const dateLabel = new Date(u.createdAt).toLocaleDateString('nl-NL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        row.innerHTML = `
+          <span class="conv-item-title">${escapeHtml(u.username)}${u.isAdmin ? ' <span style="color:var(--amber); font-family:var(--font-mono); font-size:10px;">beheerder</span>' : ''}</span>
+          <span class="conv-item-date">${dateLabel}</span>
+          ${u.isAdmin ? '' : '<button class="conv-item-del" title="Account verwijderen">✕</button>'}
+        `;
+        if (!u.isAdmin) {
+          row.querySelector('.conv-item-del').onclick = async () => {
+            if (!confirm('Account van "' + u.username + '" verwijderen? Al zijn gesprekken en instellingen gaan mee weg.')) return;
+            try {
+              await apiFetch('/api/admin/users/' + u.id, { method: 'DELETE' });
+              refreshAdminUsers();
+            } catch (e) { alert('Verwijderen mislukt: ' + e.message); }
+          };
+        }
+        list.appendChild(row);
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  $('adminSetCodeBtn').addEventListener('click', async () => {
+    const code = $('adminCodeInput').value.trim();
+    const msgEl = $('adminCodeMsg');
+    if (code.length < 6) {
+      msgEl.textContent = 'Kies een code van minstens 6 tekens.';
+      msgEl.style.color = 'var(--danger)';
+      msgEl.style.display = 'block';
+      return;
+    }
+    try {
+      await apiFetch('/api/admin/access', { method: 'PUT', body: { code } });
+      msgEl.textContent = 'Registratiecode ingesteld. Deel "' + code + '" met wie je toegang wilt geven.';
+      msgEl.style.color = 'var(--relay-green)';
+      msgEl.style.display = 'block';
+      $('adminCodeInput').value = '';
+      refreshAdminAccessStatus();
+    } catch (e) {
+      msgEl.textContent = 'Opslaan mislukt: ' + e.message;
+      msgEl.style.color = 'var(--danger)';
+      msgEl.style.display = 'block';
+    }
+  });
+
+  $('adminCloseRegBtn').addEventListener('click', async () => {
+    if (!confirm('Registratie sluiten? Nieuwe accounts kunnen dan niet meer worden aangemaakt totdat je een nieuwe code instelt.')) return;
+    try {
+      await apiFetch('/api/admin/access', { method: 'DELETE' });
+      refreshAdminAccessStatus();
+    } catch (e) { alert('Sluiten mislukt: ' + e.message); }
+  });
+
+  // init: check of er al een geldige sessie is
+  (async function init(){
+    try {
+      const me = await fetch('/api/auth/me', { credentials: 'same-origin' });
+      if (me.ok) {
+        const data = await me.json();
+        await startApp(data.username, data.isAdmin);
+      } else {
+        const bootstrap = await checkBootstrap();
+        showAuthScreen(bootstrap ? 'register' : 'login');
+      }
+    } catch (e) {
+      showAuthScreen('login');
+    }
+  })();
 })();
 </script>
 </body>

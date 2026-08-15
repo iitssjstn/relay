@@ -1,0 +1,44 @@
+const path = require('path');
+const fs = require('fs');
+const Database = require('better-sqlite3');
+
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const db = new Database(path.join(DATA_DIR, 'relay.db'));
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT 'Nieuw gesprek',
+    updated_at INTEGER NOT NULL,
+    messages TEXT NOT NULL DEFAULT '[]'
+  );
+  CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
+
+  CREATE TABLE IF NOT EXISTS node_configs (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    config TEXT NOT NULL DEFAULT '{"nodes":[],"activeIndex":-1}'
+  );
+
+  -- Losse key/value-instellingen, o.a. de gehashte registratiecode.
+  -- Wordt door de beheerder ingesteld vanuit de app zelf (geen bestand
+  -- of env-var nodig op de VPS).
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+`);
+
+module.exports = db;

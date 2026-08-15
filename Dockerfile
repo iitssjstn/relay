@@ -1,8 +1,22 @@
-FROM nginx:alpine
+FROM node:20-alpine
 
-# Relay is a single static HTML/JS/CSS app — no build step, no backend.
-# nginx just serves the file; all AI-provider calls happen client-side
-# straight from the user's browser.
-COPY src/ /usr/share/nginx/html/
+# better-sqlite3 heeft een build-toolchain nodig om zijn native module
+# te compileren tijdens npm install.
+RUN apk add --no-cache python3 make g++
 
-EXPOSE 80
+WORKDIR /app
+
+COPY server/package.json server/package-lock.json* ./server/
+RUN cd server && npm install --omit=dev
+
+COPY server/ ./server/
+COPY src/ ./src/
+
+# Hier schrijft de server zijn SQLite-database naartoe — koppel dit als
+# volume in docker-compose.yml zodat accounts/gesprekken een herstart
+# overleven.
+ENV DATA_DIR=/app/data
+ENV PORT=3000
+EXPOSE 3000
+
+CMD ["node", "server/index.js"]
