@@ -92,12 +92,20 @@
   .conv-section{
     padding: 16px 18px 4px;
     border-bottom: 1px solid var(--border-soft);
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    transition: flex-grow .25s ease;
   }
   .conv-list{
     max-height: 132px;
     overflow-y: auto;
     margin-bottom: 4px;
+    transition: max-height .25s ease;
   }
+  /* Als de Ketting is ingeklapt, krijgt Gesprekken de vrijgekomen ruimte */
+  .sidebar.chain-collapsed .conv-section{ flex: 1 1 auto; }
+  .sidebar.chain-collapsed .conv-list{ flex: 1 1 auto; max-height: none; }
   .conv-item{
     display:flex; align-items:center; gap:8px;
     padding: 7px 9px;
@@ -131,7 +139,26 @@
     flex:1;
     overflow-y:auto;
     min-height:0;
+    transition: flex-grow .25s ease;
   }
+  .sidebar.chain-collapsed .chain-section{ flex: 0 0 auto; overflow:visible; }
+
+  .chain-toggle-btn{
+    background:none; border:none; color: var(--text-faint);
+    padding:2px 4px; border-radius:5px; line-height:1; font-size:11px;
+    transition: transform .2s ease, color .15s ease;
+  }
+  .chain-toggle-btn:hover{ color: var(--text); background: var(--border-soft); }
+  .chain-toggle-btn.collapsed{ transform: rotate(-90deg); }
+
+  .chain-body-wrap{
+    display:grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows .25s ease;
+  }
+  .chain-body-wrap.collapsed{ grid-template-rows: 0fr; }
+  .chain-body-inner{ overflow:hidden; min-height:0; }
+
   .chain-label{
     font-family: var(--font-mono);
     text-transform: uppercase;
@@ -531,7 +558,7 @@
 </div>
 
 <div class="app" id="appRoot" style="display:none;">
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="brand">
       <div class="brand-mark"><span class="brand-dot"></span>Relay</div>
       <div class="brand-sub">Eén gesprek, meerdere AI's. Loopt de eerste tegen zijn contextlimiet aan, dan neemt de volgende het stokje over.</div>
@@ -543,9 +570,19 @@
     </div>
 
     <div class="chain-section">
-      <div class="chain-label"><span>Ketting</span><span id="chainCount"></span></div>
-      <div id="nodeList"></div>
-      <button class="add-node-btn" id="addNodeBtn">+ AI toevoegen aan de ketting</button>
+      <div class="chain-label">
+        <span>Ketting</span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span id="chainCount"></span>
+          <button class="chain-toggle-btn" id="chainToggleBtn" title="Ketting in-/uitklappen" aria-expanded="true">▾</button>
+        </span>
+      </div>
+      <div class="chain-body-wrap" id="chainBodyWrap">
+        <div class="chain-body-inner">
+          <div id="nodeList"></div>
+          <button class="add-node-btn" id="addNodeBtn">+ AI toevoegen aan de ketting</button>
+        </div>
+      </div>
     </div>
     <div class="sidebar-footer" style="flex-direction:column; gap:8px;">
       <div style="display:flex; gap:8px; width:100%;">
@@ -713,6 +750,18 @@
   const activeBadge = $('activeBadge');
   const chainCount = $('chainCount');
   const convListEl = $('convList');
+  const sidebarEl = $('sidebar');
+  const chainBodyWrap = $('chainBodyWrap');
+  const chainToggleBtn = $('chainToggleBtn');
+
+  let chainCollapsed = false;
+  chainToggleBtn.addEventListener('click', () => {
+    chainCollapsed = !chainCollapsed;
+    chainBodyWrap.classList.toggle('collapsed', chainCollapsed);
+    chainToggleBtn.classList.toggle('collapsed', chainCollapsed);
+    chainToggleBtn.setAttribute('aria-expanded', String(!chainCollapsed));
+    sidebarEl.classList.toggle('chain-collapsed', chainCollapsed);
+  });
 
   function uid(){ return 'n' + Math.random().toString(36).slice(2, 9); }
 
