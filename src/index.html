@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Relay — multi-AI chatketen</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --bg: #0c0f14;
+    --panel: #12161d;
+    --panel-2: #171c25;
+    --border: #262e3a;
+    --border-soft: #1c222c;
+    --text: #e7ebf1;
+    --text-dim: #8b95a5;
+    --text-faint: #556072;
+    --amber: #ffb454;
+    --amber-dim: #6b5330;
+    --relay-green: #52d68a;
+    --relay-green-dim: #1f3a2c;
+    --danger: #ff6b6b;
+    --danger-dim: #3a2020;
+    --focus: #ffb454;
+    --radius: 10px;
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  *{ box-sizing: border-box; }
+  html,body{ height:100%; }
+  body{
+    margin:0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{ animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+
+  button, input, select, textarea{ font-family: inherit; color: inherit; }
+  button{ cursor:pointer; }
+  ::selection{ background: var(--amber-dim); color: var(--text); }
+
+  a{ color: var(--amber); }
+
+  /* Layout */
+  .app{
+    display:grid;
+    grid-template-columns: 300px 1fr;
+    height: 100vh;
+    max-height: 100vh;
+  }
+  @media (max-width: 860px){
+    .app{ grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; min-height: 100vh; }
+    .sidebar{ max-height: 40vh; overflow-y:auto; }
+  }
+
+  /* Sidebar */
+  .sidebar{
+    background: var(--panel);
+    border-right: 1px solid var(--border-soft);
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+  }
+  .brand{
+    padding: 20px 18px 14px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .brand-mark{
+    display:flex; align-items:center; gap:9px;
+    font-family: var(--font-display);
+    font-weight:700; font-size:19px; letter-spacing: -0.01em;
+  }
+  .brand-dot{
+    width:9px; height:9px; border-radius:50%;
+    background: var(--relay-green);
+    box-shadow: 0 0 8px var(--relay-green);
+    flex-shrink:0;
+  }
+  .brand-sub{
+    color: var(--text-faint);
+    font-size:12px; margin-top:4px; line-height:1.4;
+  }
+
+  .conv-section{
+    padding: 16px 18px 4px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .conv-list{
+    max-height: 132px;
+    overflow-y: auto;
+    margin-bottom: 4px;
+  }
+  .conv-item{
+    display:flex; align-items:center; gap:8px;
+    padding: 7px 9px;
+    border-radius: 8px;
+    cursor:pointer;
+    margin-bottom:2px;
+    border:1px solid transparent;
+  }
+  .conv-item:hover{ background: var(--panel-2); }
+  .conv-item.active{ background: var(--panel-2); border-color: var(--border); }
+  .conv-item-title{
+    flex:1; font-size:12.5px; font-weight:500;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .conv-item.active .conv-item-title{ color: var(--amber); }
+  .conv-item-date{
+    font-family: var(--font-mono); font-size:10px; color: var(--text-faint);
+    flex-shrink:0;
+  }
+  .conv-item-del{
+    background:none; border:none; color: var(--text-faint);
+    font-size:12px; padding:2px 4px; border-radius:4px; flex-shrink:0;
+  }
+  .conv-item-del:hover{ color: var(--danger); }
+  .conv-empty-hint{
+    font-size:11.5px; color: var(--text-faint); padding: 4px 2px 10px; line-height:1.5;
+  }
+
+  .chain-section{
+    padding: 16px 18px 8px;
+    flex:1;
+    overflow-y:auto;
+    min-height:0;
+  }
+  .chain-label{
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-bottom:10px;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+
+  .node{
+    position:relative;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 11px;
+    margin-bottom: 8px;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .node.active{
+    border-color: var(--relay-green);
+    box-shadow: 0 0 0 1px var(--relay-green-dim);
+  }
+  .node.exhausted{ opacity: 0.55; }
+  .node.error{ border-color: var(--danger); }
+
+  .node-connector{
+    position:absolute;
+    left: 20px; top: -9px;
+    width:1px; height:8px;
+    background: var(--border);
+  }
+  .node:first-child .node-connector{ display:none; }
+
+  .node-top{
+    display:flex; align-items:center; gap:8px;
+  }
+  .node-light{
+    width:7px; height:7px; border-radius:50%;
+    background: var(--text-faint);
+    flex-shrink:0;
+  }
+  .node.active .node-light{
+    background: var(--relay-green);
+    box-shadow: 0 0 6px var(--relay-green);
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+  .node.error .node-light{ background: var(--danger); }
+  @keyframes pulse{
+    0%,100%{ opacity:1; } 50%{ opacity:0.4; }
+  }
+
+  .node-name{
+    font-weight:600; font-size:13px; flex:1;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .node-provider{
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    text-transform:uppercase;
+    letter-spacing:0.04em;
+  }
+  .node-model{
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top:5px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .node-meta{
+    display:flex; justify-content:space-between; align-items:center;
+    margin-top:7px;
+  }
+  .node-status-text{
+    font-size:10.5px; color: var(--text-faint);
+    font-family: var(--font-mono);
+  }
+  .node-actions{ display:flex; gap:4px; }
+  .node-actions button{
+    background:none; border:none; color: var(--text-faint);
+    font-size:12px; padding:3px 5px; border-radius:5px;
+    line-height:1;
+  }
+  .node-actions button:hover{ color: var(--text); background: var(--border-soft); }
+
+  .add-node-btn{
+    width:100%;
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    padding: 10px;
+    font-size: 12.5px;
+    font-weight:500;
+    margin-top: 2px;
+    transition: border-color .15s, color .15s;
+  }
+  .add-node-btn:hover{ border-color: var(--amber); color: var(--amber); }
+
+  .sidebar-footer{
+    padding: 12px 18px 16px;
+    border-top: 1px solid var(--border-soft);
+    display:flex; gap:8px;
+  }
+  .ghost-btn{
+    flex:1;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 6px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    font-weight:500;
+    transition: all .15s;
+  }
+  .ghost-btn:hover{ color: var(--text); border-color: var(--text-faint); }
+
+  /* Main chat */
+  .main{
+    display:flex; flex-direction:column;
+    min-height:0;
+    height:100%;
+  }
+  .chat-header{
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border-soft);
+    display:flex; align-items:center; justify-content:space-between;
+    gap:12px;
+  }
+  .chat-header-title{
+    font-family: var(--font-display);
+    font-weight:600; font-size:15px;
+  }
+  .active-badge{
+    font-family: var(--font-mono);
+    font-size:11px;
+    color: var(--relay-green);
+    background: var(--relay-green-dim);
+    border: 1px solid rgba(82,214,138,0.25);
+    padding: 4px 10px;
+    border-radius: 999px;
+    white-space:nowrap;
+  }
+  .active-badge.none{
+    color: var(--text-faint);
+    background: var(--panel-2);
+    border-color: var(--border);
+  }
+  .header-actions{ display:flex; gap:8px; align-items:center; }
+  .icon-btn{
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size:12px;
+    font-weight:500;
+  }
+  .icon-btn:hover{ color: var(--text); border-color: var(--text-faint); }
+
+  .messages{
+    flex:1;
+    overflow-y:auto;
+    padding: 22px 24px;
+    display:flex; flex-direction:column; gap:16px;
+  }
+
+  .empty-state{
+    margin: auto;
+    text-align:center;
+    max-width: 420px;
+    color: var(--text-faint);
+  }
+  .empty-state-mark{
+    font-family: var(--font-display);
+    font-size: 22px;
+    color: var(--text-dim);
+    margin-bottom:8px;
+  }
+  .empty-state p{ font-size:13px; line-height:1.6; }
+
+  .msg{
+    display:flex; gap:11px;
+    max-width: 760px;
+  }
+  .msg.user{ align-self:flex-end; flex-direction:row-reverse; }
+  .msg.system{ align-self:center; max-width:640px; }
+
+  .avatar{
+    width:26px; height:26px; border-radius:7px;
+    flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    font-family: var(--font-mono);
+    font-size:11px; font-weight:600;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    margin-top:2px;
+  }
+  .msg.user .avatar{ background: var(--amber-dim); color: var(--amber); border-color: transparent; }
+  .msg.assistant .avatar{ background: var(--relay-green-dim); color: var(--relay-green); border-color: transparent; }
+
+  .bubble{
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 10px 13px;
+    line-height:1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .msg.user .bubble{ background: #1a1710; border-color: rgba(255,180,84,0.15); }
+  .msg-meta{
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    margin-bottom:4px;
+  }
+
+  .msg.system .bubble{
+    background: transparent;
+    border: 1px dashed var(--border);
+    color: var(--text-dim);
+    font-size:12px;
+    font-family: var(--font-mono);
+    text-align:center;
+    padding: 8px 14px;
+  }
+  .msg.system.handoff .bubble{ border-color: var(--relay-green-dim); color: var(--relay-green); }
+  .msg.system.err .bubble{ border-color: var(--danger); color: var(--danger); }
+
+  .typing{
+    display:inline-flex; gap:3px; align-items:center; padding: 2px 0;
+  }
+  .typing span{
+    width:5px; height:5px; border-radius:50%; background: var(--text-faint);
+    animation: blink 1.2s infinite ease-in-out;
+  }
+  .typing span:nth-child(2){ animation-delay: .2s; }
+  .typing span:nth-child(3){ animation-delay: .4s; }
+  @keyframes blink{ 0%,80%,100%{ opacity:.25 } 40%{ opacity:1 } }
+
+  .composer{
+    border-top: 1px solid var(--border-soft);
+    padding: 14px 24px 18px;
+  }
+  .composer-box{
+    display:flex; gap:10px; align-items:flex-end;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px 8px 8px 14px;
+    transition: border-color .15s;
+  }
+  .composer-box:focus-within{ border-color: var(--amber); }
+  .composer-box textarea{
+    flex:1;
+    background:none; border:none; outline:none; resize:none;
+    color: var(--text);
+    font-size:14px;
+    line-height:1.5;
+    max-height: 160px;
+    padding: 6px 0;
+    font-family: var(--font-body);
+  }
+  .composer-box textarea::placeholder{ color: var(--text-faint); }
+  .send-btn{
+    background: var(--amber);
+    color: #1a1305;
+    border:none;
+    border-radius: 8px;
+    width:36px; height:36px;
+    flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    font-size:15px;
+    font-weight:700;
+    transition: transform .1s, opacity .15s;
+  }
+  .send-btn:hover{ transform: translateY(-1px); }
+  .send-btn:disabled{ opacity:0.35; cursor:not-allowed; transform:none; }
+  .composer-hint{
+    font-size:10.5px; color: var(--text-faint); margin-top:7px; text-align:center;
+    font-family: var(--font-mono);
+  }
+  .composer-hint a{ color: var(--text-faint); text-decoration: underline; }
+
+  /* Modal */
+  .modal-overlay{
+    position:fixed; inset:0; background: rgba(6,8,11,0.72);
+    display:flex; align-items:center; justify-content:center;
+    z-index: 50; padding: 20px;
+    backdrop-filter: blur(2px);
+  }
+  .modal{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    width: 100%; max-width: 440px;
+    max-height: 88vh;
+    overflow-y:auto;
+    padding: 22px;
+  }
+  .modal h2{
+    font-family: var(--font-display);
+    font-size:17px; margin: 0 0 4px;
+  }
+  .modal .modal-sub{ color: var(--text-faint); font-size:12px; margin-bottom:18px; line-height:1.5; }
+
+  .field{ margin-bottom: 14px; }
+  .field label{
+    display:block; font-size:11.5px; font-weight:600;
+    color: var(--text-dim); margin-bottom:6px;
+    text-transform:uppercase; letter-spacing:0.03em;
+  }
+  .field input, .field select{
+    width:100%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 11px;
+    font-size:13.5px;
+    outline:none;
+  }
+  .field input:focus, .field select:focus{ border-color: var(--amber); }
+  .field-hint{ font-size:11px; color: var(--text-faint); margin-top:5px; line-height:1.4; }
+  .key-row{ display:flex; gap:6px; }
+  .key-row input{ flex:1; }
+  .key-row button{
+    background: var(--panel-2); border:1px solid var(--border);
+    border-radius:8px; padding: 0 12px; color: var(--text-dim); font-size:11px;
+  }
+  .field-2col{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+
+  .modal-actions{
+    display:flex; gap:8px; margin-top: 20px;
+  }
+  .btn{
+    flex:1; padding: 10px; border-radius:9px; border:none; font-weight:600; font-size:13px;
+  }
+  .btn-primary{ background: var(--amber); color:#1a1305; }
+  .btn-secondary{ background: var(--panel-2); color: var(--text-dim); border:1px solid var(--border); }
+  .btn-danger-text{ background:none; color: var(--danger); border:none; font-size:12px; padding:8px; }
+
+  .provider-hint-box{
+    background: var(--panel-2); border:1px solid var(--border-soft); border-radius:8px;
+    padding:10px 11px; font-size:11.5px; color: var(--text-dim); line-height:1.5; margin-bottom:16px;
+  }
+  .provider-hint-box code{ font-family: var(--font-mono); color: var(--amber); font-size:11px; }
+
+  .copyright-note{
+    font-size:10.5px; color: var(--text-faint); line-height:1.5; margin-top:16px;
+    border-top:1px solid var(--border-soft); padding-top:12px;
+  }
+
+  ::-webkit-scrollbar{ width:9px; height:9px; }
+  ::-webkit-scrollbar-track{ background:transparent; }
+  ::-webkit-scrollbar-thumb{ background: var(--border); border-radius:5px; }
+  ::-webkit-scrollbar-thumb:hover{ background: var(--text-faint); }
+
+  :focus-visible{ outline: 2px solid var(--focus); outline-offset:2px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><span class="brand-dot"></span>Relay</div>
+      <div class="brand-sub">Eén gesprek, meerdere AI's. Loopt de eerste tegen zijn contextlimiet aan, dan neemt de volgende het stokje over.</div>
+    </div>
+    <div class="conv-section">
+      <div class="chain-label"><span>Gesprekken</span></div>
+      <button class="add-node-btn" id="newConvBtn" style="margin-bottom:8px;">+ Nieuw gesprek</button>
+      <div class="conv-list" id="convList"></div>
+    </div>
+
+    <div class="chain-section">
+      <div class="chain-label"><span>Ketting</span><span id="chainCount"></span></div>
+      <div id="nodeList"></div>
+      <button class="add-node-btn" id="addNodeBtn">+ AI toevoegen aan de ketting</button>
+    </div>
+    <div class="sidebar-footer">
+      <button class="ghost-btn" id="exportBtn">Exporteer config</button>
+      <button class="ghost-btn" id="importBtn">Importeer config</button>
+      <input type="file" id="importFile" accept="application/json" style="display:none">
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="chat-header">
+      <div class="chat-header-title">Gesprek</div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span class="active-badge none" id="activeBadge">geen AI actief</span>
+        <div class="header-actions">
+          <button class="icon-btn" id="clearBtn">Wis gesprek</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="messages" id="messages">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-state-mark">◇</div>
+        <p>Nog geen AI ingesteld. Klik links op <strong>"AI toevoegen aan de ketting"</strong>, vul een API-key en model in, en begin het gesprek. Voeg gerust meerdere AI's toe — Relay schakelt automatisch door als de actieve AI zijn contextlimiet bereikt.</p>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="composer-box">
+        <textarea id="input" rows="1" placeholder="Typ je vraag..." disabled></textarea>
+        <button class="send-btn" id="sendBtn" disabled>↑</button>
+      </div>
+      <div class="composer-hint">API-keys en gesprekken worden lokaal opgeslagen in je browser (localStorage) en rechtstreeks naar de gekozen AI-provider gestuurd — nooit naar een server van derden. Morgen verder kletsen kan gewoon door dit bestand weer te openen.</div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-overlay" id="modalOverlay" style="display:none;">
+  <div class="modal">
+    <h2 id="modalTitle">AI toevoegen</h2>
+    <div class="modal-sub">Vul de gegevens van een AI-provider in. Deze wordt onderaan de ketting toegevoegd.</div>
+
+    <div class="field">
+      <label>Provider</label>
+      <select id="fProvider">
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="openai">OpenAI (GPT)</option>
+        <option value="google">Google (Gemini)</option>
+        <option value="custom">Aangepast — OpenAI-compatibel endpoint</option>
+      </select>
+    </div>
+
+    <div class="provider-hint-box" id="providerHint"></div>
+
+    <div class="field">
+      <label>Weergavenaam</label>
+      <input id="fName" type="text" placeholder="bv. Claude Sonnet">
+    </div>
+
+    <div class="field">
+      <label>Model</label>
+      <input id="fModel" type="text" placeholder="bv. claude-sonnet-4-6">
+    </div>
+
+    <div class="field" id="fBaseUrlWrap" style="display:none;">
+      <label>Base URL</label>
+      <input id="fBaseUrl" type="text" placeholder="https://.../v1/chat/completions">
+    </div>
+
+    <div class="field">
+      <label>API-key</label>
+      <div class="key-row">
+        <input id="fKey" type="password" placeholder="sk-...">
+        <button type="button" id="toggleKeyBtn">toon</button>
+      </div>
+      <div class="field-hint">Wordt alleen client-side gebruikt om rechtstreeks met de provider te praten, en lokaal opgeslagen in de browseropslag van dit apparaat (localStorage) — niet naar een server van derden gestuurd. Gebruik dit dus niet op een gedeelde of publieke computer.</div>
+    </div>
+
+    <div class="field-2col">
+      <div class="field">
+        <label>Max context (tokens)</label>
+        <input id="fMaxTokens" type="number" placeholder="bv. 200000">
+      </div>
+      <div class="field">
+        <label>Max antwoordlengte</label>
+        <input id="fMaxOutput" type="number" placeholder="bv. 4096">
+      </div>
+    </div>
+
+    <div class="copyright-note">
+      Let op: elke provider heeft zijn eigen gebruiksvoorwaarden. Gebruik deze tool alleen met API-keys waar je zelf recht toe hebt, en respecteer de auteursrechten en herpublicatie-regels van de betreffende aanbieder — output van een AI-model overnemen als eigen werk of zonder toestemming commercieel herpubliceren kan in strijd zijn met die voorwaarden.
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="modalCancelBtn">Annuleren</button>
+      <button class="btn btn-primary" id="modalSaveBtn">Opslaan</button>
+    </div>
+    <button class="btn-danger-text" id="modalDeleteBtn" style="display:none;">Deze AI verwijderen uit de ketting</button>
+  </div>
+</div>
+
+<script>
+(function(){
+
+  const PROVIDER_DEFAULTS = {
+    anthropic: { model: 'claude-sonnet-4-6', maxTokens: 200000, maxOutput: 4096,
+      hint: 'Praat rechtstreeks met de Anthropic Messages API. Vereist een geldige Anthropic API-key.' },
+    openai: { model: 'gpt-4.1', maxTokens: 128000, maxOutput: 4096,
+      hint: 'Praat rechtstreeks met de OpenAI Chat Completions API. Vereist een geldige OpenAI API-key.' },
+    google: { model: 'gemini-2.5-pro', maxTokens: 1000000, maxOutput: 8192,
+      hint: 'Praat rechtstreeks met de Google Gemini generateContent API. Vereist een geldige Gemini API-key.' },
+    custom: { model: '', maxTokens: 32000, maxOutput: 4096,
+      hint: 'Voor elk OpenAI-compatibel endpoint (lokaal model, proxy, alternatieve aanbieder). Vul de volledige chat/completions-URL in.' }
+  };
+
+  let nodes = [];          // {id, provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, status}
+  let activeIndex = -1;    // index in nodes[] currently handling the conversation
+  let conversation = [];   // {role: 'user'|'assistant', content}
+  let editingId = null;
+  let sending = false;
+  let currentConvId = null;
+  let convIndex = [];      // [{id, title, updatedAt}], newest first
+
+  const $ = (id) => document.getElementById(id);
+  const nodeList = $('nodeList');
+  const messagesEl = $('messages');
+  const emptyState = $('emptyState');
+  const input = $('input');
+  const sendBtn = $('sendBtn');
+  const activeBadge = $('activeBadge');
+  const chainCount = $('chainCount');
+  const convListEl = $('convList');
+
+  function uid(){ return 'n' + Math.random().toString(36).slice(2, 9); }
+
+  // ---------- Local storage persistence ----------
+  const LS_NODES = 'relay_nodes';
+  const LS_CONV_INDEX = 'relay_conv_index';
+  const LS_CONV_PREFIX = 'relay_conv_';
+  const LS_LAST_OPEN = 'relay_last_open';
+
+  function safeGet(key){
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+  function safeSet(key, val){
+    try { localStorage.setItem(key, val); } catch { /* storage unavailable or full */ }
+  }
+  function safeRemove(key){
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+  }
+
+  function saveNodes(){
+    safeSet(LS_NODES, JSON.stringify(nodes));
+  }
+  function loadNodes(){
+    const raw = safeGet(LS_NODES);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        nodes = parsed.map(n => ({ ...n, status: 'queued' }));
+      }
+    } catch { /* ignore corrupt data */ }
+  }
+
+  function loadConvIndex(){
+    const raw = safeGet(LS_CONV_INDEX);
+    try { convIndex = raw ? JSON.parse(raw) : []; } catch { convIndex = []; }
+  }
+  function saveConvIndex(){
+    safeSet(LS_CONV_INDEX, JSON.stringify(convIndex));
+  }
+
+  function titleFromConversation(msgs){
+    const firstUser = msgs.find(m => m.role === 'user');
+    if (!firstUser) return 'Nieuw gesprek';
+    const t = firstUser.content.trim().replace(/\s+/g, ' ');
+    return t.length > 42 ? t.slice(0, 42) + '…' : t;
+  }
+
+  function saveCurrentConversation(){
+    if (!currentConvId || conversation.length === 0) return;
+    const meta = { id: currentConvId, title: titleFromConversation(conversation), updatedAt: Date.now() };
+    safeSet(LS_CONV_PREFIX + currentConvId, JSON.stringify({ ...meta, messages: conversation }));
+    const existingIdx = convIndex.findIndex(c => c.id === currentConvId);
+    if (existingIdx !== -1) convIndex[existingIdx] = meta; else convIndex.unshift(meta);
+    convIndex.sort((a, b) => b.updatedAt - a.updatedAt);
+    saveConvIndex();
+    safeSet(LS_LAST_OPEN, currentConvId);
+    renderConvList();
+  }
+
+  function loadConversationById(id){
+    const raw = safeGet(LS_CONV_PREFIX + id);
+    if (!raw) return false;
+    try {
+      const data = JSON.parse(raw);
+      currentConvId = id;
+      conversation = data.messages || [];
+      renderFullConversation();
+      nodes.forEach(n => n.status = 'queued');
+      activeIndex = nodes.length ? 0 : -1;
+      safeSet(LS_LAST_OPEN, id);
+      renderNodes();
+      renderConvList();
+      return true;
+    } catch { return false; }
+  }
+
+  function deleteConversationById(id){
+    safeRemove(LS_CONV_PREFIX + id);
+    convIndex = convIndex.filter(c => c.id !== id);
+    saveConvIndex();
+    if (currentConvId === id) {
+      createNewConversation();
+    } else {
+      renderConvList();
+    }
+  }
+
+  function createNewConversation(){
+    currentConvId = uid();
+    conversation = [];
+    messagesEl.innerHTML = '';
+    messagesEl.appendChild(emptyState);
+    nodes.forEach(n => n.status = 'queued');
+    activeIndex = nodes.length ? 0 : -1;
+    safeSet(LS_LAST_OPEN, currentConvId);
+    renderNodes();
+    renderConvList();
+  }
+
+  function renderFullConversation(){
+    messagesEl.innerHTML = '';
+    if (conversation.length === 0) {
+      messagesEl.appendChild(emptyState);
+      return;
+    }
+    conversation.forEach(m => {
+      if (m.role === 'user') addMessage('user', m.content);
+      else addMessage('assistant', m.content, { providerName: m.providerName || 'AI' });
+    });
+  }
+
+  function renderConvList(){
+    convListEl.innerHTML = '';
+    if (convIndex.length === 0) {
+      const hint = document.createElement('div');
+      hint.className = 'conv-empty-hint';
+      hint.textContent = 'Nog geen opgeslagen gesprekken. Zodra je een bericht verstuurt, wordt dit gesprek automatisch bewaard.';
+      convListEl.appendChild(hint);
+      return;
+    }
+    convIndex.forEach(c => {
+      const el = document.createElement('div');
+      el.className = 'conv-item' + (c.id === currentConvId ? ' active' : '');
+      const d = new Date(c.updatedAt);
+      const dateLabel = d.toLocaleDateString('nl-NL', { day: '2-digit', month: '2-digit' });
+      el.innerHTML = `
+        <span class="conv-item-title">${escapeHtml(c.title)}</span>
+        <span class="conv-item-date">${dateLabel}</span>
+        <button class="conv-item-del" title="Verwijderen">✕</button>
+      `;
+      el.querySelector('.conv-item-title').onclick = () => loadConversationById(c.id);
+      el.querySelector('.conv-item-date').onclick = () => loadConversationById(c.id);
+      el.querySelector('.conv-item-del').onclick = (e) => {
+        e.stopPropagation();
+        if (confirm('Dit gesprek verwijderen? Dit kan niet ongedaan worden gemaakt.')) deleteConversationById(c.id);
+      };
+      convListEl.appendChild(el);
+    });
+  }
+
+  function estimateTokens(text){
+    // rough heuristic: ~4 chars per token
+    return Math.ceil((text || '').length / 4);
+  }
+
+  function conversationTokenEstimate(){
+    return conversation.reduce((sum, m) => sum + estimateTokens(m.content), 200);
+  }
+
+  // ---------- Rendering ----------
+
+  function renderNodes(){
+    nodeList.innerHTML = '';
+    chainCount.textContent = nodes.length ? nodes.length + ' AI' + (nodes.length > 1 ? "'s" : '') : '';
+    nodes.forEach((node, i) => {
+      const el = document.createElement('div');
+      el.className = 'node' + (i === activeIndex ? ' active' : '') + (node.status === 'exhausted' ? ' exhausted' : '') + (node.status === 'error' ? ' error' : '');
+      const statusText = i === activeIndex ? 'actief — bezig met gesprek'
+        : node.status === 'exhausted' ? 'contextlimiet bereikt'
+        : node.status === 'error' ? 'fout opgetreden'
+        : node.status === 'done' ? 'klaar voor gebruik'
+        : 'in de wachtrij';
+      el.innerHTML = `
+        <div class="node-connector"></div>
+        <div class="node-top">
+          <span class="node-light"></span>
+          <span class="node-name">${escapeHtml(node.name)}</span>
+        </div>
+        <div class="node-provider">${node.provider}</div>
+        <div class="node-model">${escapeHtml(node.model || '(geen model ingesteld)')}</div>
+        <div class="node-meta">
+          <span class="node-status-text">${statusText}</span>
+          <span class="node-actions">
+            <button data-act="up" title="Omhoog">↑</button>
+            <button data-act="down" title="Omlaag">↓</button>
+            <button data-act="edit" title="Bewerken">✎</button>
+          </span>
+        </div>
+      `;
+      el.querySelector('[data-act="up"]').onclick = () => moveNode(i, -1);
+      el.querySelector('[data-act="down"]').onclick = () => moveNode(i, 1);
+      el.querySelector('[data-act="edit"]').onclick = () => openModal(node);
+      nodeList.appendChild(el);
+    });
+    updateComposerState();
+    updateActiveBadge();
+  }
+
+  function updateActiveBadge(){
+    if (activeIndex >= 0 && nodes[activeIndex]) {
+      activeBadge.textContent = 'via ' + nodes[activeIndex].name;
+      activeBadge.classList.remove('none');
+    } else if (nodes.length) {
+      activeBadge.textContent = 'klaar om te starten';
+      activeBadge.classList.remove('none');
+    } else {
+      activeBadge.textContent = 'geen AI actief';
+      activeBadge.classList.add('none');
+    }
+  }
+
+  function updateComposerState(){
+    const ready = nodes.length > 0 && !sending;
+    input.disabled = !ready;
+    sendBtn.disabled = !ready || !input.value.trim();
+    if (nodes.length && emptyState.parentElement) {
+      // keep empty state until first message sent; handled in addMessage
+    }
+  }
+
+  function moveNode(i, dir){
+    const j = i + dir;
+    if (j < 0 || j >= nodes.length) return;
+    [nodes[i], nodes[j]] = [nodes[j], nodes[i]];
+    if (activeIndex === i) activeIndex = j;
+    else if (activeIndex === j) activeIndex = i;
+    saveNodes();
+    renderNodes();
+  }
+
+  function escapeHtml(s){
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+  }
+
+  function addMessage(role, content, opts){
+    opts = opts || {};
+    if (emptyState.parentElement) emptyState.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + role + (opts.cls ? ' ' + opts.cls : '');
+    if (role === 'system') {
+      wrap.innerHTML = `<div class="bubble">${escapeHtml(content)}</div>`;
+    } else {
+      const avatarLabel = role === 'user' ? 'JIJ' : (opts.providerName ? opts.providerName.slice(0,2).toUpperCase() : 'AI');
+      wrap.innerHTML = `
+        <div class="avatar">${avatarLabel}</div>
+        <div>
+          ${opts.providerName ? `<div class="msg-meta">${escapeHtml(opts.providerName)}</div>` : ''}
+          <div class="bubble">${escapeHtml(content)}</div>
+        </div>
+      `;
+    }
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return wrap;
+  }
+
+  function addTypingIndicator(providerName){
+    if (emptyState.parentElement) emptyState.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'msg assistant';
+    wrap.innerHTML = `
+      <div class="avatar">${providerName.slice(0,2).toUpperCase()}</div>
+      <div>
+        <div class="msg-meta">${escapeHtml(providerName)}</div>
+        <div class="bubble"><span class="typing"><span></span><span></span><span></span></span></div>
+      </div>
+    `;
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return wrap;
+  }
+
+  // ---------- Modal ----------
+
+  function openModal(node){
+    editingId = node ? node.id : null;
+    $('modalTitle').textContent = node ? 'AI bewerken' : 'AI toevoegen';
+    $('fProvider').value = node ? node.provider : 'anthropic';
+    $('fName').value = node ? node.name : '';
+    $('fModel').value = node ? node.model : PROVIDER_DEFAULTS['anthropic'].model;
+    $('fBaseUrl').value = node ? (node.baseUrl || '') : '';
+    $('fKey').value = node ? node.apiKey : '';
+    $('fKey').type = 'password';
+    $('toggleKeyBtn').textContent = 'toon';
+    $('fMaxTokens').value = node ? node.maxTokens : PROVIDER_DEFAULTS['anthropic'].maxTokens;
+    $('fMaxOutput').value = node ? node.maxOutput : PROVIDER_DEFAULTS['anthropic'].maxOutput;
+    $('modalDeleteBtn').style.display = node ? 'block' : 'none';
+    updateProviderHint();
+    $('modalOverlay').style.display = 'flex';
+    setTimeout(() => $('fName').focus(), 30);
+  }
+
+  function closeModal(){
+    $('modalOverlay').style.display = 'none';
+    editingId = null;
+  }
+
+  function updateProviderHint(){
+    const p = $('fProvider').value;
+    const d = PROVIDER_DEFAULTS[p];
+    $('providerHint').textContent = d.hint;
+    $('fBaseUrlWrap').style.display = p === 'custom' ? 'block' : 'none';
+    if (!editingId) {
+      $('fModel').value = d.model;
+      $('fMaxTokens').value = d.maxTokens;
+      $('fMaxOutput').value = d.maxOutput;
+      if (!$('fName').value) $('fName').value = { anthropic:'Claude', openai:'GPT', google:'Gemini', custom:'Aangepast model' }[p];
+    }
+  }
+
+  $('fProvider').addEventListener('change', updateProviderHint);
+  $('toggleKeyBtn').addEventListener('click', () => {
+    const f = $('fKey');
+    f.type = f.type === 'password' ? 'text' : 'password';
+    $('toggleKeyBtn').textContent = f.type === 'password' ? 'toon' : 'verberg';
+  });
+  $('addNodeBtn').addEventListener('click', () => openModal(null));
+  $('modalCancelBtn').addEventListener('click', closeModal);
+  $('modalOverlay').addEventListener('click', (e) => { if (e.target.id === 'modalOverlay') closeModal(); });
+
+  $('modalSaveBtn').addEventListener('click', () => {
+    const provider = $('fProvider').value;
+    const name = $('fName').value.trim() || PROVIDER_DEFAULTS[provider].model;
+    const model = $('fModel').value.trim();
+    const apiKey = $('fKey').value.trim();
+    const baseUrl = $('fBaseUrl').value.trim();
+    const maxTokens = parseInt($('fMaxTokens').value, 10) || PROVIDER_DEFAULTS[provider].maxTokens;
+    const maxOutput = parseInt($('fMaxOutput').value, 10) || PROVIDER_DEFAULTS[provider].maxOutput;
+
+    if (!model) { $('fModel').focus(); return; }
+    if (!apiKey) { $('fKey').focus(); return; }
+    if (provider === 'custom' && !baseUrl) { $('fBaseUrl').focus(); return; }
+
+    if (editingId) {
+      const node = nodes.find(n => n.id === editingId);
+      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput });
+    } else {
+      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, status: 'queued' });
+      if (activeIndex === -1) activeIndex = 0;
+    }
+    saveNodes();
+    renderNodes();
+    closeModal();
+  });
+
+  $('modalDeleteBtn').addEventListener('click', () => {
+    const idx = nodes.findIndex(n => n.id === editingId);
+    if (idx === -1) return;
+    nodes.splice(idx, 1);
+    if (activeIndex >= nodes.length) activeIndex = nodes.length - 1;
+    saveNodes();
+    renderNodes();
+    closeModal();
+  });
+
+  // ---------- Export / Import ----------
+
+  $('exportBtn').addEventListener('click', () => {
+    const data = JSON.stringify({ nodes, activeIndex }, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'relay-config.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  $('importBtn').addEventListener('click', () => $('importFile').click());
+  $('importFile').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (Array.isArray(data.nodes)) {
+          nodes = data.nodes;
+          activeIndex = typeof data.activeIndex === 'number' ? data.activeIndex : (nodes.length ? 0 : -1);
+          saveNodes();
+          renderNodes();
+        }
+      } catch (err) {
+        addMessage('system', 'Import mislukt: bestand kon niet worden gelezen.', { cls: 'err' });
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  });
+
+  $('clearBtn').addEventListener('click', () => {
+    createNewConversation();
+  });
+  $('newConvBtn').addEventListener('click', () => {
+    createNewConversation();
+  });
+
+  // ---------- Sending / relay logic ----------
+
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+    updateComposerState();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      trySend();
+    }
+  });
+  sendBtn.addEventListener('click', trySend);
+
+  function trySend(){
+    const text = input.value.trim();
+    if (!text || sending || activeIndex === -1) return;
+    input.value = '';
+    input.style.height = 'auto';
+    conversation.push({ role: 'user', content: text });
+    addMessage('user', text);
+    updateComposerState();
+    saveCurrentConversation();
+    runTurn();
+  }
+
+  async function runTurn(){
+    sending = true;
+    updateComposerState();
+
+    let attempts = 0;
+    while (attempts < nodes.length) {
+      const node = nodes[activeIndex];
+      const estTokens = conversationTokenEstimate();
+
+      // Pre-emptively hand off if we're clearly over this node's budget before even calling it.
+      if (estTokens > node.maxTokens * 0.92) {
+        const handedOff = handOffToNext(node, 'contextlimiet (geschat) bereikt vóór verzending');
+        if (!handedOff) break;
+        attempts++;
+        continue;
+      }
+
+      node.status = 'active';
+      renderNodes();
+      const typingEl = addTypingIndicator(node.name);
+
+      try {
+        const replyText = await callProvider(node, conversation);
+        typingEl.remove();
+        node.status = 'done';
+        conversation.push({ role: 'assistant', content: replyText, providerName: node.name });
+        addMessage('assistant', replyText, { providerName: node.name });
+        renderNodes();
+        sending = false;
+        updateComposerState();
+        saveCurrentConversation();
+        return;
+      } catch (err) {
+        typingEl.remove();
+        if (err.isContextLimit) {
+          const handedOff = handOffToNext(node, 'contextlimiet bereikt bij ' + node.name);
+          if (!handedOff) {
+            addMessage('system', 'Alle AI\'s in de ketting hebben hun contextlimiet bereikt. Voeg een extra AI toe of wis het gesprek.', { cls: 'err' });
+            break;
+          }
+          attempts++;
+          continue;
+        } else {
+          node.status = 'error';
+          renderNodes();
+          addMessage('system', node.name + ' gaf een fout: ' + err.message, { cls: 'err' });
+          const handedOff = handOffToNext(node, 'fout bij ' + node.name + ', volgende AI proberen');
+          if (!handedOff) break;
+          attempts++;
+          continue;
+        }
+      }
+    }
+    sending = false;
+    updateComposerState();
+  }
+
+  function handOffToNext(currentNode, reason){
+    currentNode.status = 'exhausted';
+    if (activeIndex + 1 >= nodes.length) {
+      renderNodes();
+      return false;
+    }
+    activeIndex += 1;
+    addMessage('system', '🔁 ' + reason + ' — schakel over naar ' + nodes[activeIndex].name + ', gesprek loopt door.', { cls: 'handoff' });
+    renderNodes();
+    return true;
+  }
+
+  // ---------- Provider adapters ----------
+
+  function isContextLimitError(providerType, status, bodyText){
+    const t = (bodyText || '').toLowerCase();
+    if (status === 413) return true;
+    if (t.includes('context_length_exceeded')) return true;
+    if (t.includes('maximum context length')) return true;
+    if (t.includes('too many tokens') || t.includes('token limit') || t.includes('context window')) return true;
+    if (providerType === 'anthropic' && t.includes('prompt is too long')) return true;
+    if (providerType === 'google' && t.includes('exceeds the maximum number of tokens')) return true;
+    return false;
+  }
+
+  async function callProvider(node, history){
+    if (node.provider === 'anthropic') return callAnthropic(node, history);
+    if (node.provider === 'openai') return callOpenAI(node, history, 'https://api.openai.com/v1/chat/completions');
+    if (node.provider === 'google') return callGoogle(node, history);
+    if (node.provider === 'custom') return callOpenAI(node, history, node.baseUrl);
+    throw new Error('Onbekende provider');
+  }
+
+  async function callAnthropic(node, history){
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': node.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: node.model,
+        max_tokens: node.maxOutput || 4096,
+        messages: history.map(m => ({ role: m.role, content: m.content }))
+      })
+    });
+    const bodyText = await res.text();
+    if (!res.ok) {
+      if (isContextLimitError('anthropic', res.status, bodyText)) {
+        const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+      }
+      throw new Error(parseErrMsg(bodyText, res.status));
+    }
+    const data = JSON.parse(bodyText);
+    return (data.content || []).map(b => b.text || '').join('').trim() || '(leeg antwoord)';
+  }
+
+  async function callOpenAI(node, history, url){
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + node.apiKey
+      },
+      body: JSON.stringify({
+        model: node.model,
+        max_tokens: node.maxOutput || 4096,
+        messages: history.map(m => ({ role: m.role, content: m.content }))
+      })
+    });
+    const bodyText = await res.text();
+    if (!res.ok) {
+      if (isContextLimitError('openai', res.status, bodyText)) {
+        const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+      }
+      throw new Error(parseErrMsg(bodyText, res.status));
+    }
+    const data = JSON.parse(bodyText);
+    return data.choices?.[0]?.message?.content?.trim() || '(leeg antwoord)';
+  }
+
+  async function callGoogle(node, history){
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(node.model)}:generateContent?key=${encodeURIComponent(node.apiKey)}`;
+    const contents = history.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }]
+    }));
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents,
+        generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
+      })
+    });
+    const bodyText = await res.text();
+    if (!res.ok) {
+      if (isContextLimitError('google', res.status, bodyText)) {
+        const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+      }
+      throw new Error(parseErrMsg(bodyText, res.status));
+    }
+    const data = JSON.parse(bodyText);
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    return parts.map(p => p.text || '').join('').trim() || '(leeg antwoord)';
+  }
+
+  function parseErrMsg(bodyText, status){
+    try {
+      const j = JSON.parse(bodyText);
+      return (j.error && (j.error.message || j.error)) || j.message || ('HTTP ' + status);
+    } catch {
+      return 'HTTP ' + status + (bodyText ? ' — ' + bodyText.slice(0, 140) : '');
+    }
+  }
+
+  // init
+  loadNodes();
+  loadConvIndex();
+  const lastOpen = safeGet(LS_LAST_OPEN);
+  if (lastOpen && convIndex.some(c => c.id === lastOpen)) {
+    loadConversationById(lastOpen);
+  } else {
+    currentConvId = uid();
+    activeIndex = nodes.length ? 0 : -1;
+    renderConvList();
+  }
+  renderNodes();
+})();
+</script>
+</body>
+</html>
