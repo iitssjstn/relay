@@ -66,9 +66,57 @@
     height: 100vh;
     max-height: 100vh;
   }
+  .app.hidden{ display:none; }
+
+
+  /* Mobiele topbalk (hamburger + naam) — alleen zichtbaar onder de breakpoint */
+  .mobile-topbar{
+    display:none;
+    align-items:center; gap:12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--panel);
+    flex-shrink:0;
+  }
+  .mobile-menu-btn{
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text-dim); width:34px; height:34px; border-radius:8px;
+    font-size:16px; display:flex; align-items:center; justify-content:center;
+    flex-shrink:0;
+  }
+  .mobile-topbar-title{
+    font-family: var(--font-display); font-weight:700; font-size:16px;
+  }
+  .sidebar-backdrop{
+    display:none;
+    position:fixed; inset:0;
+    background: rgba(6,8,11,0.6);
+    z-index:45;
+  }
+  .sidebar-backdrop.show{ display:block; }
+
   @media (max-width: 860px){
-    .app{ grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; min-height: 100vh; }
-    .sidebar{ max-height: 40vh; overflow-y:auto; }
+    html, body{ height:100%; overflow:hidden; }
+    body{ display:flex; flex-direction:column; height:100dvh; }
+    .mobile-topbar.show{ display:flex; }
+    .app{
+      display:block;
+      position:relative;
+      flex:1; min-height:0;
+      height:auto; max-height:none;
+      overflow:hidden;
+    }
+    .sidebar{
+      position:fixed; top:0; bottom:0; left:0;
+      width:85vw; max-width:340px;
+      max-height:none;
+      z-index:50;
+      transform: translateX(-100%);
+      transition: transform .25s ease;
+      box-shadow: 4px 0 28px rgba(0,0,0,0.5);
+    }
+    .sidebar.open{ transform: translateX(0); }
+    .main{ height:100%; }
   }
 
   /* Installatiebanner (PWA) */
@@ -113,6 +161,16 @@
     display:flex; align-items:center; gap:9px;
     font-family: var(--font-display);
     font-weight:700; font-size:19px; letter-spacing: -0.01em;
+  }
+  .sidebar-close-btn{
+    display:none;
+    margin-left:auto;
+    background: var(--panel-2); border:1px solid var(--border);
+    color: var(--text-dim); width:28px; height:28px; border-radius:7px;
+    font-size:13px; align-items:center; justify-content:center;
+  }
+  @media (max-width: 860px){
+    .sidebar-close-btn{ display:flex; }
   }
   .brand-dot{
     width:9px; height:9px; border-radius:50%;
@@ -669,6 +727,12 @@
 </head>
 <body>
 
+<div class="mobile-topbar" id="mobileTopbar">
+  <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Menu openen">☰</button>
+  <span class="mobile-topbar-title">Relay</span>
+</div>
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
 <div class="install-banner" id="installBanner">
   <img class="install-banner-icon" src="/icons/icon-192.png" alt="">
   <div class="install-banner-text" id="installBannerText"><strong>Relay</strong> installeren als app op dit toestel?</div>
@@ -706,10 +770,13 @@
   </div>
 </div>
 
-<div class="app" id="appRoot" style="display:none;">
+<div class="app hidden" id="appRoot" data-app-root>
   <aside class="sidebar" id="sidebar">
     <div class="brand">
-      <div class="brand-mark"><span class="brand-dot"></span>Relay</div>
+      <div class="brand-mark">
+        <span class="brand-dot"></span>Relay
+        <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Menu sluiten">✕</button>
+      </div>
       <div class="brand-sub">Eén gesprek, meerdere AI's. Loopt de eerste tegen zijn contextlimiet aan, dan neemt de volgende het stokje over.</div>
     </div>
     <div class="conv-section">
@@ -1095,6 +1162,7 @@
       activeIndex = nodes.length ? 0 : -1;
       renderNodes();
       renderConvList();
+      closeMobileSidebar();
       return true;
     } catch (e) { return false; }
   }
@@ -1117,6 +1185,7 @@
     activeIndex = nodes.length ? 0 : -1;
     renderNodes();
     renderConvList();
+    closeMobileSidebar();
   }
 
   function renderFullConversation(){
@@ -1931,6 +2000,25 @@
 
   const authOverlay = $('authOverlay');
   const appRoot = $('appRoot');
+  const mobileTopbar = $('mobileTopbar');
+  const mobileMenuBtn = $('mobileMenuBtn');
+  const sidebarBackdrop = $('sidebarBackdrop');
+
+  function openMobileSidebar(){
+    sidebarEl.classList.add('open');
+    sidebarBackdrop.classList.add('show');
+  }
+  function closeMobileSidebar(){
+    sidebarEl.classList.remove('open');
+    sidebarBackdrop.classList.remove('show');
+  }
+  mobileMenuBtn.addEventListener('click', () => {
+    if (sidebarEl.classList.contains('open')) closeMobileSidebar();
+    else openMobileSidebar();
+  });
+  sidebarBackdrop.addEventListener('click', closeMobileSidebar);
+  $('sidebarCloseBtn').addEventListener('click', closeMobileSidebar);
+
   let authMode = 'login';
   const inviteCodeFromUrl = new URLSearchParams(location.search).get('invite') || '';
   let isBootstrap = false;
@@ -1969,12 +2057,14 @@
     if (message) { errEl.textContent = message; errEl.style.display = 'block'; }
     else { errEl.style.display = 'none'; }
     authOverlay.style.display = 'flex';
-    appRoot.style.display = 'none';
+    appRoot.classList.add('hidden');
+    mobileTopbar.classList.remove('show');
   }
 
   function hideAuthScreen(username, isAdmin){
     authOverlay.style.display = 'none';
-    appRoot.style.display = 'grid';
+    appRoot.classList.remove('hidden');
+    mobileTopbar.classList.add('show');
     $('authUserLabel').textContent = username ? '@' + username : '';
     $('adminBtn').style.display = isAdmin ? 'block' : 'none';
   }
@@ -2244,6 +2334,14 @@
   function isIOSDevice(){
     return /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
   }
+  function isMobileDevice(){
+    // Betrouwbaarder dan een breedte-check (een smal browservenster op pc
+    // telt niet mee): controleer het daadwerkelijke apparaattype.
+    if (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean') {
+      return navigator.userAgentData.mobile;
+    }
+    return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+  }
   function installBannerDismissed(){
     try { return localStorage.getItem('relay_install_dismissed') === 'true'; } catch (e) { return false; }
   }
@@ -2254,7 +2352,9 @@
 
   installBannerDismissBtn.addEventListener('click', dismissInstallBanner);
 
-  if (!isStandaloneDisplay() && !installBannerDismissed()) {
+  // Alleen op mobiel tonen — op desktop ondersteunt Chrome/Edge dezelfde
+  // installatie-prompt ook, maar daar hoort deze banner niet thuis.
+  if (isMobileDevice() && !isStandaloneDisplay() && !installBannerDismissed()) {
     if (isIOSDevice()) {
       // Safari/iOS kent geen automatische installatie-prompt — alleen een
       // handmatige route via het deel-icoon.
