@@ -1513,24 +1513,28 @@
       <div class="avatar">${providerName.slice(0,2).toUpperCase()}</div>
       <div>
         <div class="msg-meta">${escapeHtml(providerName)}</div>
-        <div class="bubble markdown"><span class="typing"><span></span><span></span><span></span></span></div>
+        <div class="bubble streaming-plain"><span class="stream-text"><span class="typing"><span></span><span></span><span></span></span></span><span class="stream-cursor"></span></div>
       </div>
     `;
     messagesEl.appendChild(wrap);
     if (autoScrollToBottom) scrollMessagesToBottom();
     const bubbleEl = wrap.querySelector('.bubble');
+    const textEl = bubbleEl.querySelector('.stream-text');
 
-    // Bij snelle providers komen er soms tientallen tekstfragmenten per
-    // seconde binnen. Elke DOM-aanpassing daarvan onderbreekt een actief
-    // scrollgebaar (vooral merkbaar op mobiel) — daarom schrijven we
-    // hooguit één keer per animatieframe naar het scherm, in plaats van
-    // bij elk los fragment.
+    // Tijdens het typen tonen we platte tekst — snel, geen markdown-parse
+    // nodig per fragment, precies zoals voordat er opmaak bijkwam. Pas als
+    // het antwoord compleet is (finish) parsen we één keer de volledige
+    // markdown, in plaats van dat bij elk fragment opnieuw te doen — dat
+    // laatste werd merkbaar zwaarder naarmate het bericht langer werd en
+    // zorgde voor haperingen. De cursor is een vaste DOM-node die niet
+    // steeds opnieuw wordt aangemaakt, zodat de knipper-animatie soepel
+    // doorloopt in plaats van elk frame te herstarten.
     let pendingText = null;
     let frameScheduled = false;
     function flush(){
       frameScheduled = false;
       if (pendingText === null) return;
-      bubbleEl.innerHTML = renderMarkdownSafe(pendingText) + '<span class="stream-cursor"></span>';
+      textEl.textContent = pendingText;
       pendingText = null;
       if (autoScrollToBottom) scrollMessagesToBottom();
     }
@@ -1546,6 +1550,8 @@
       },
       finish(text){
         pendingText = null;
+        bubbleEl.classList.remove('streaming-plain');
+        bubbleEl.classList.add('markdown');
         bubbleEl.innerHTML = renderMarkdownSafe(text || '(leeg antwoord)');
         addCopyButton(bubbleEl, text || '(leeg antwoord)');
       },
