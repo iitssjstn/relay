@@ -593,18 +593,18 @@
         </div>
       </div>
     </div>
-    <div class="sidebar-footer" style="flex-direction:column; gap:8px;">
+    <div class="sidebar-footer" style="flex-direction:column; gap:10px;">
       <div style="display:flex; gap:8px; width:100%;">
         <button class="ghost-btn" id="exportBtn">Exporteer config</button>
         <button class="ghost-btn" id="importBtn">Importeer config</button>
         <input type="file" id="importFile" accept="application/json" style="display:none">
       </div>
-      <div style="display:flex; align-items:center; justify-content:space-between; width:100%; padding-top:4px; border-top:1px solid var(--border-soft);">
-        <span id="authUserLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-top:8px;"></span>
-        <div style="display:flex; gap:6px;">
-          <button class="ghost-btn" id="memoryBtn" style="flex:none; padding:6px 10px; margin-top:8px;">Geheugen</button>
-          <button class="ghost-btn" id="adminBtn" style="display:none; flex:none; padding:6px 10px; margin-top:8px;">Beheer</button>
-          <button class="ghost-btn" id="logoutBtn" style="flex:none; padding:6px 10px; margin-top:8px;">Uitloggen</button>
+      <div style="border-top:1px solid var(--border-soft); padding-top:10px; width:100%;">
+        <div id="authUserLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+        <div style="display:flex; gap:6px; width:100%;">
+          <button class="ghost-btn" id="memoryBtn" style="flex:1; min-width:0;">Geheugen</button>
+          <button class="ghost-btn" id="adminBtn" style="display:none; flex:1; min-width:0;">Beheer</button>
+          <button class="ghost-btn" id="logoutBtn" style="flex:1; min-width:0;">Uitloggen</button>
         </div>
       </div>
     </div>
