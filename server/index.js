@@ -29,7 +29,9 @@ if (!JWT_SECRET) {
 }
 
 const app = express();
-app.use(express.json({ limit: '5mb' }));
+// 25mb i.p.v. 5mb — gesprekken kunnen nu base64-gecodeerde afbeeldingen
+// bevatten, die aanmerkelijk groter zijn dan platte tekst.
+app.use(express.json({ limit: '25mb' }));
 app.use(cookieParser());
 app.set('trust proxy', 1); // NPM zit ervoor als reverse proxy
 
