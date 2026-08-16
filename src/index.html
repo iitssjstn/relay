@@ -94,6 +94,7 @@
     border-bottom: 1px solid var(--border-soft);
     display:flex;
     flex-direction:column;
+    flex: 0 1 auto;
     min-height:0;
     transition: flex-grow .25s ease;
   }
@@ -103,9 +104,11 @@
     margin-bottom: 4px;
     transition: max-height .25s ease;
   }
-  /* Als de Ketting is ingeklapt, krijgt Gesprekken de vrijgekomen ruimte */
-  .sidebar.chain-collapsed .conv-section{ flex: 1 1 auto; }
-  .sidebar.chain-collapsed .conv-list{ flex: 1 1 auto; max-height: none; }
+  /* Als de Ketting is ingeklapt, krijgt Gesprekken de vrijgekomen ruimte.
+     Alleen flex-grow verandert (basis/shrink blijven gelijk) zodat de
+     browser dit vloeiend kan animeren i.p.v. te laten springen. */
+  .sidebar.chain-collapsed .conv-section{ flex-grow: 1; }
+  .sidebar.chain-collapsed .conv-list{ flex: 1 1 auto; max-height: 2000px; }
   .conv-item{
     display:flex; align-items:center; gap:8px;
     padding: 7px 9px;
@@ -136,12 +139,12 @@
 
   .chain-section{
     padding: 16px 18px 8px;
-    flex:1;
+    flex: 1 1 auto;
     overflow-y:auto;
     min-height:0;
     transition: flex-grow .25s ease;
   }
-  .sidebar.chain-collapsed .chain-section{ flex: 0 0 auto; overflow:visible; }
+  .sidebar.chain-collapsed .chain-section{ flex-grow: 0; overflow:visible; }
 
   .chain-toggle-btn{
     background: var(--panel-2);
