@@ -59,12 +59,22 @@ function signToken(user) {
 function requireAuth(req, res, next) {
   const token = req.cookies[COOKIE_NAME];
   if (!token) return res.status(401).json({ error: 'Niet ingelogd.' });
+  let payload;
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
+    payload = jwt.verify(token, JWT_SECRET);
   } catch {
-    res.status(401).json({ error: 'Sessie verlopen, log opnieuw in.' });
+    return res.status(401).json({ error: 'Sessie verlopen, log opnieuw in.' });
   }
+  // Het cookie zelf blijft geldig ondertekend nadat een account is
+  // verwijderd (of geblokkeerd) — check daarom bij elk verzoek of het
+  // account nog echt bestaat, i.p.v. alleen op de handtekening te vertrouwen.
+  const user = db.prepare('SELECT id, username, is_admin FROM users WHERE id = ?').get(payload.uid);
+  if (!user) {
+    res.clearCookie(COOKIE_NAME);
+    return res.status(401).json({ error: 'Dit account bestaat niet meer.' });
+  }
+  req.user = { uid: user.id, username: user.username, isAdmin: !!user.is_admin };
+  next();
 }
 
 function requireAdmin(req, res, next) {
