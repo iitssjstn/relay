@@ -41,4 +41,11 @@ db.exec(`
   );
 `);
 
+// Migratie: 'memory' kolom toevoegen aan bestaande installaties die 'm nog
+// niet hebben (CREATE TABLE IF NOT EXISTS raakt bestaande tabellen niet aan).
+const userColumns = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+if (!userColumns.includes('memory')) {
+  db.exec("ALTER TABLE users ADD COLUMN memory TEXT NOT NULL DEFAULT ''");
+}
+
 module.exports = db;

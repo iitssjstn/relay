@@ -203,6 +203,25 @@ app.put('/api/nodes', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Geheugen (notities over jezelf, gaan mee in elk gesprek) ----------
+
+const MEMORY_MAX_CHARS = 4000;
+
+app.get('/api/memory', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT memory FROM users WHERE id = ?').get(req.user.uid);
+  res.json({ memory: row ? row.memory : '' });
+});
+
+app.put('/api/memory', requireAuth, (req, res) => {
+  let { memory } = req.body || {};
+  if (typeof memory !== 'string') memory = '';
+  if (memory.length > MEMORY_MAX_CHARS) {
+    return res.status(400).json({ error: `Maximaal ${MEMORY_MAX_CHARS} tekens.` });
+  }
+  db.prepare('UPDATE users SET memory = ? WHERE id = ?').run(memory, req.user.uid);
+  res.json({ ok: true });
+});
+
 // ---------- Admin: toegang & gebruikersbeheer ----------
 
 app.get('/api/admin/access', requireAuth, requireAdmin, (req, res) => {
