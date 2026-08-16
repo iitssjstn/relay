@@ -384,6 +384,7 @@
     line-height:1.55;
     white-space: pre-wrap;
     word-break: break-word;
+    position: relative;
   }
   .msg.user .bubble{ background: #1a1710; border-color: rgba(255,180,84,0.15); }
   .msg-meta{
@@ -392,6 +393,51 @@
     color: var(--text-faint);
     margin-bottom:4px;
   }
+
+  /* Markdown-gerenderde inhoud (AI-antwoorden) — geen pre-wrap nodig,
+     de opmaak komt uit de HTML-structuur zelf. */
+  .bubble.markdown{ white-space: normal; }
+  .bubble.markdown p{ margin: 0 0 10px; }
+  .bubble.markdown p:last-child{ margin-bottom: 0; }
+  .bubble.markdown ul, .bubble.markdown ol{ margin: 0 0 10px; padding-left: 22px; }
+  .bubble.markdown li{ margin-bottom: 3px; }
+  .bubble.markdown a{ color: var(--amber); text-decoration: underline; }
+  .bubble.markdown strong{ color: var(--text); font-weight: 600; }
+  .bubble.markdown h1, .bubble.markdown h2, .bubble.markdown h3{
+    font-family: var(--font-display); font-weight:600; margin: 14px 0 8px; line-height:1.3;
+  }
+  .bubble.markdown h1:first-child, .bubble.markdown h2:first-child, .bubble.markdown h3:first-child{ margin-top:0; }
+  .bubble.markdown h1{ font-size:17px; } .bubble.markdown h2{ font-size:15.5px; } .bubble.markdown h3{ font-size:14px; }
+  .bubble.markdown blockquote{
+    border-left: 2px solid var(--border); margin: 0 0 10px; padding: 2px 0 2px 12px; color: var(--text-dim);
+  }
+  .bubble.markdown code{
+    font-family: var(--font-mono); font-size: 0.9em;
+    background: var(--bg); border: 1px solid var(--border-soft);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  .bubble.markdown pre{
+    background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
+    padding: 11px 13px; overflow-x: auto; margin: 0 0 10px;
+  }
+  .bubble.markdown pre code{
+    background: none; border: none; padding: 0; font-size: 12.5px; line-height:1.5;
+  }
+  .bubble.markdown hr{ border: none; border-top: 1px solid var(--border-soft); margin: 12px 0; }
+  .bubble.markdown table{ border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }
+  .bubble.markdown th, .bubble.markdown td{ border: 1px solid var(--border-soft); padding: 5px 9px; text-align:left; }
+
+  .msg-copy-btn{
+    position: absolute; top: 6px; right: 6px;
+    background: var(--panel); border: 1px solid var(--border);
+    color: var(--text-faint); border-radius: 6px;
+    font-size: 10.5px; padding: 3px 7px;
+    opacity: 0; transition: opacity .15s ease, color .15s ease, border-color .15s ease;
+  }
+  .msg.user .msg-copy-btn{ right:auto; left:6px; }
+  .bubble:hover .msg-copy-btn{ opacity: 1; }
+  .msg-copy-btn:hover{ color: var(--text); border-color: var(--text-faint); }
+  @media (hover:none){ .msg-copy-btn{ opacity: 1; } } /* touchscreens: altijd zichtbaar */
 
   .msg.system .bubble{
     background: transparent;
@@ -757,6 +803,8 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/marked@4.0.10/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.3/dist/purify.min.js"></script>
 <script>
 (function(){
 
@@ -828,7 +876,10 @@
   }
 
   async function saveNodes(){
-    try { await apiFetch('/api/nodes', { method: 'PUT', body: { nodes, activeIndex } }); }
+    // coolDownUntil is puur een tijdelijke, lokale hint voor deze sessie —
+    // hoort niet in de opgeslagen server-config terecht te komen.
+    const cleanNodes = nodes.map(({ coolDownUntil, ...rest }) => rest);
+    try { await apiFetch('/api/nodes', { method: 'PUT', body: { nodes: cleanNodes, activeIndex } }); }
     catch (e) { console.error('Instellingen opslaan mislukt:', e.message); }
   }
 
@@ -956,7 +1007,8 @@
   function setActiveNode(i){
     if (sending || !nodes[i] || i === activeIndex) return;
     activeIndex = i;
-    if (nodes[i].status === 'error' || nodes[i].status === 'exhausted') nodes[i].status = 'queued';
+    if (nodes[i].status === 'error' || nodes[i].status === 'exhausted' || nodes[i].status === 'cooldown') nodes[i].status = 'queued';
+    nodes[i].coolDownUntil = null;
     renderNodes();
     saveNodes();
   }
@@ -966,8 +1018,9 @@
     chainCount.textContent = nodes.length ? nodes.length + ' AI' + (nodes.length > 1 ? "'s" : '') : '';
     nodes.forEach((node, i) => {
       const el = document.createElement('div');
-      el.className = 'node' + (i === activeIndex ? ' active' : '') + (node.status === 'exhausted' ? ' exhausted' : '') + (node.status === 'error' ? ' error' : '');
+      el.className = 'node' + (i === activeIndex ? ' active' : '') + ((node.status === 'exhausted' || node.status === 'cooldown') ? ' exhausted' : '') + (node.status === 'error' ? ' error' : '');
       const statusText = i === activeIndex ? 'actief — bezig met gesprek'
+        : node.status === 'cooldown' ? 'tijdelijk overgeslagen (rate limit) — klik om toch te gebruiken'
         : node.status === 'exhausted' ? 'contextlimiet bereikt — klik om toch te gebruiken'
         : node.status === 'error' ? 'fout opgetreden — klik om opnieuw te proberen'
         : 'klik om deze AI te gebruiken';
@@ -1053,6 +1106,32 @@
     return d.innerHTML;
   }
 
+  function renderMarkdownSafe(text){
+    try {
+      const html = window.marked ? window.marked.parse(text, { breaks: true }) : escapeHtml(text);
+      return window.DOMPurify ? window.DOMPurify.sanitize(html) : html;
+    } catch (e) {
+      return escapeHtml(text);
+    }
+  }
+
+  function addCopyButton(bubbleEl, rawText){
+    const btn = document.createElement('button');
+    btn.className = 'msg-copy-btn';
+    btn.type = 'button';
+    btn.title = 'Kopieer';
+    btn.textContent = 'kopieer';
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(rawText);
+        btn.textContent = 'gekopieerd';
+        setTimeout(() => { btn.textContent = 'kopieer'; }, 1400);
+      } catch (err) { /* clipboard niet beschikbaar, negeer stil */ }
+    });
+    bubbleEl.appendChild(btn);
+  }
+
   function addMessage(role, content, opts){
     opts = opts || {};
     if (emptyState.parentElement) emptyState.remove();
@@ -1062,13 +1141,17 @@
       wrap.innerHTML = `<div class="bubble">${escapeHtml(content)}</div>`;
     } else {
       const avatarLabel = role === 'user' ? 'JIJ' : (opts.providerName ? opts.providerName.slice(0,2).toUpperCase() : 'AI');
+      const bubbleHtml = role === 'assistant'
+        ? `<div class="bubble markdown">${renderMarkdownSafe(content)}</div>`
+        : `<div class="bubble">${escapeHtml(content)}</div>`;
       wrap.innerHTML = `
         <div class="avatar">${avatarLabel}</div>
         <div>
           ${opts.providerName ? `<div class="msg-meta">${escapeHtml(opts.providerName)}</div>` : ''}
-          <div class="bubble">${escapeHtml(content)}</div>
+          ${bubbleHtml}
         </div>
       `;
+      addCopyButton(wrap.querySelector('.bubble'), content);
     }
     messagesEl.appendChild(wrap);
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1249,6 +1332,16 @@
     let attempts = 0;
     while (attempts < nodes.length) {
       const node = nodes[activeIndex];
+
+      // Provider gaf recent een rate-limit-fout — stilletjes overslaan
+      // tot de afkoeltijd voorbij is, zonder het opnieuw te proberen.
+      if (node.coolDownUntil && Date.now() < node.coolDownUntil && activeIndex + 1 < nodes.length) {
+        activeIndex += 1;
+        renderNodes();
+        attempts++;
+        continue;
+      }
+
       const estTokens = conversationTokenEstimate();
 
       // Pre-emptively hand off if we're clearly over this node's budget before even calling it.
@@ -1267,6 +1360,7 @@
         const replyText = await callProvider(node, conversation);
         typingEl.remove();
         node.status = 'done';
+        node.coolDownUntil = null;
         conversation.push({ role: 'assistant', content: replyText, providerName: node.name });
         addMessage('assistant', replyText, { providerName: node.name });
         renderNodes();
@@ -1281,6 +1375,15 @@
           const handedOff = handOffToNext(node, 'contextlimiet bereikt bij ' + node.name);
           if (!handedOff) {
             addMessage('system', 'Alle AI\'s in de ketting hebben hun contextlimiet bereikt. Voeg een extra AI toe of wis het gesprek.', { cls: 'err' });
+            break;
+          }
+          attempts++;
+          continue;
+        } else if (err.isRateLimit) {
+          node.coolDownUntil = Date.now() + 60000; // 60s afkoelen voordat we 'm weer proberen
+          const handedOff = handOffToNext(node, 'rate limit bereikt bij ' + node.name + ' (60s afkoelen)', 'cooldown');
+          if (!handedOff) {
+            addMessage('system', 'Alle AI\'s in de ketting zitten (tijdelijk) tegen een limiet aan. Probeer het zo weer, of voeg een extra AI toe.', { cls: 'err' });
             break;
           }
           attempts++;
@@ -1300,8 +1403,8 @@
     updateComposerState();
   }
 
-  function handOffToNext(currentNode, reason){
-    currentNode.status = 'exhausted';
+  function handOffToNext(currentNode, reason, statusLabel){
+    currentNode.status = statusLabel || 'exhausted';
     if (activeIndex + 1 >= nodes.length) {
       renderNodes();
       return false;
@@ -1322,6 +1425,14 @@
     if (t.includes('too many tokens') || t.includes('token limit') || t.includes('context window')) return true;
     if (providerType === 'anthropic' && t.includes('prompt is too long')) return true;
     if (providerType === 'google' && t.includes('exceeds the maximum number of tokens')) return true;
+    return false;
+  }
+
+  function isRateLimitError(status, bodyText){
+    const t = (bodyText || '').toLowerCase();
+    if (status === 429) return true;
+    if (t.includes('rate limit') || t.includes('rate_limit') || t.includes('too many requests')) return true;
+    if (t.includes('quota') && (t.includes('exceeded') || t.includes('exhausted'))) return true;
     return false;
   }
 
@@ -1357,6 +1468,9 @@
       if (isContextLimitError('anthropic', res.status, bodyText)) {
         const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
       }
+      if (isRateLimitError(res.status, bodyText)) {
+        const e = new Error('rate limit'); e.isRateLimit = true; throw e;
+      }
       throw new Error(parseErrMsg(bodyText, res.status));
     }
     const data = JSON.parse(bodyText);
@@ -1383,6 +1497,9 @@
     if (!res.ok) {
       if (isContextLimitError('openai', res.status, bodyText)) {
         const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+      }
+      if (isRateLimitError(res.status, bodyText)) {
+        const e = new Error('rate limit'); e.isRateLimit = true; throw e;
       }
       throw new Error(parseErrMsg(bodyText, res.status));
     }
@@ -1411,6 +1528,9 @@
     if (!res.ok) {
       if (isContextLimitError('google', res.status, bodyText)) {
         const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+      }
+      if (isRateLimitError(res.status, bodyText)) {
+        const e = new Error('rate limit'); e.isRateLimit = true; throw e;
       }
       throw new Error(parseErrMsg(bodyText, res.status));
     }
