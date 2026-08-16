@@ -275,6 +275,65 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- AI-provider proxy ----------
+//
+// Sommige providers (o.a. Groq) staan geen rechtstreekse browser->API-
+// aanroepen toe (CORS-blokkade). De server heeft daar geen last van, dus
+// alle AI-aanroepen lopen voortaan via deze proxy: browser -> Relay-server
+// -> provider -> (gestreamd) terug naar de browser. De API-key van de
+// gebruiker gaat hierbij alleen naar de provider zelf, nooit ergens anders
+// heen — Relay leest of bewaart de inhoud van het antwoord niet.
+
+const RATE_LIMIT_HEADER_ALLOWLIST = [
+  'content-type',
+  'x-ratelimit-limit-requests', 'x-ratelimit-remaining-requests', 'x-ratelimit-reset-requests',
+  'x-ratelimit-limit-tokens', 'x-ratelimit-remaining-tokens', 'x-ratelimit-reset-tokens',
+  'anthropic-ratelimit-requests-limit', 'anthropic-ratelimit-requests-remaining', 'anthropic-ratelimit-requests-reset',
+  'anthropic-ratelimit-tokens-limit', 'anthropic-ratelimit-tokens-remaining', 'anthropic-ratelimit-tokens-reset',
+  'anthropic-ratelimit-input-tokens-limit', 'anthropic-ratelimit-input-tokens-remaining'
+];
+
+function isBlockedProxyTarget(urlStr){
+  let u;
+  try { u = new URL(urlStr); } catch { return true; }
+  if (u.protocol !== 'https:') return true;
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1') return true;
+  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  return false;
+}
+
+app.post('/api/relay-proxy', requireAuth, async (req, res) => {
+  const { url, headers, body } = req.body || {};
+  if (!url || isBlockedProxyTarget(url)) {
+    return res.status(400).json({ error: 'Ongeldige of niet-toegestane proxy-bestemming.' });
+  }
+  try {
+    const providerRes = await fetch(url, {
+      method: 'POST',
+      headers: headers || {},
+      body: typeof body === 'string' ? body : JSON.stringify(body)
+    });
+
+    res.status(providerRes.status);
+    for (const [key, value] of providerRes.headers.entries()) {
+      if (RATE_LIMIT_HEADER_ALLOWLIST.includes(key.toLowerCase())) res.setHeader(key, value);
+    }
+
+    if (!providerRes.body) { res.end(); return; }
+    const reader = providerRes.body.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      res.write(value);
+    }
+    res.end();
+  } catch (e) {
+    res.status(502).json({ error: 'Kon de AI-provider niet bereiken: ' + e.message });
+  }
+});
+
 // ---------- Static frontend ----------
 
 app.use(express.static(path.join(__dirname, '..', 'src')));
