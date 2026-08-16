@@ -235,7 +235,12 @@ app.put('/api/memory', requireAuth, (req, res) => {
 // ---------- Admin: toegang & gebruikersbeheer ----------
 
 app.get('/api/admin/access', requireAuth, requireAdmin, (req, res) => {
-  res.json({ registrationOpen: !!getSetting('registration_code_hash') });
+  res.json({
+    registrationOpen: !!getSetting('registration_code_hash'),
+    // Alleen zichtbaar voor beheerders — nodig om de uitnodigingslink op
+    // elk moment opnieuw te kunnen tonen, niet alleen direct na instellen.
+    code: getSetting('registration_code_plain') || null
+  });
 });
 
 app.put('/api/admin/access', requireAuth, requireAdmin, (req, res) => {
@@ -244,11 +249,13 @@ app.put('/api/admin/access', requireAuth, requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Kies een registratiecode van minstens 6 tekens.' });
   }
   setSetting('registration_code_hash', bcrypt.hashSync(code, 12));
+  setSetting('registration_code_plain', code);
   res.json({ ok: true });
 });
 
 app.delete('/api/admin/access', requireAuth, requireAdmin, (req, res) => {
   deleteSetting('registration_code_hash');
+  deleteSetting('registration_code_plain');
   res.json({ ok: true });
 });
 

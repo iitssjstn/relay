@@ -737,6 +737,15 @@
       <button class="btn-danger-text" id="adminCloseRegBtn" style="display:none; padding:8px 0 0; text-align:left;">Registratie sluiten (geen nieuwe accounts meer)</button>
     </div>
 
+    <div class="field" id="adminInviteLinkField" style="display:none;">
+      <label>Uitnodigingslink</label>
+      <div class="key-row">
+        <input id="adminInviteLinkInput" type="text" readonly style="font-family:var(--font-mono); font-size:11.5px;">
+        <button type="button" id="adminCopyInviteBtn">kopieer</button>
+      </div>
+      <div class="field-hint">Stuur deze link naar iemand — de code staat er al in ingevuld, ze hoeven alleen nog een gebruikersnaam en wachtwoord te kiezen.</div>
+    </div>
+
     <div class="field" style="margin-top:18px;">
       <label>Accounts</label>
       <div class="conv-list" id="adminUserList" style="max-height:220px;"></div>
@@ -1424,6 +1433,7 @@
   const authOverlay = $('authOverlay');
   const appRoot = $('appRoot');
   let authMode = 'login';
+  const inviteCodeFromUrl = new URLSearchParams(location.search).get('invite') || '';
   let isBootstrap = false;
 
   async function checkBootstrap(){
@@ -1450,6 +1460,12 @@
     $('authToggleBtn').style.display = firstRun ? 'none' : 'block';
     $('authToggleBtn').textContent = authMode === 'login' ? 'Nog geen account? Account aanmaken' : 'Al een account? Inloggen';
     $('authCodeField').style.display = (authMode === 'register' && !firstRun) ? 'block' : 'none';
+    if (authMode === 'register' && !firstRun && inviteCodeFromUrl) {
+      $('authCode').value = inviteCodeFromUrl;
+      if (!message) {
+        $('authSub').textContent = 'Je uitnodigingscode is al ingevuld — kies een gebruikersnaam en wachtwoord.';
+      }
+    }
     const errEl = $('authError');
     if (message) { errEl.textContent = message; errEl.style.display = 'block'; }
     else { errEl.style.display = 'none'; }
@@ -1628,8 +1644,26 @@
         ? 'Registratie staat open — nieuwe accounts kunnen worden aangemaakt met de huidige code.'
         : 'Registratie is gesloten — er is nog geen registratiecode ingesteld.';
       $('adminCloseRegBtn').style.display = data.registrationOpen ? 'block' : 'none';
+      if (data.code) {
+        $('adminInviteLinkField').style.display = 'block';
+        $('adminInviteLinkInput').value = location.origin + '/?invite=' + encodeURIComponent(data.code);
+      } else {
+        $('adminInviteLinkField').style.display = 'none';
+      }
     } catch (e) { $('adminAccessStatus').textContent = 'Kon status niet ophalen.'; }
   }
+
+  $('adminCopyInviteBtn').addEventListener('click', async () => {
+    const input = $('adminInviteLinkInput');
+    input.select();
+    try {
+      await navigator.clipboard.writeText(input.value);
+      const btn = $('adminCopyInviteBtn');
+      const original = btn.textContent;
+      btn.textContent = 'gekopieerd!';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch (e) { /* clipboard-API niet beschikbaar; tekst staat al geselecteerd om handmatig te kopiëren */ }
+  });
 
   async function refreshAdminUsers(){
     try {
@@ -1700,10 +1734,16 @@
         await startApp(data.username, data.isAdmin);
       } else {
         const bootstrap = await checkBootstrap();
-        showAuthScreen(bootstrap ? 'register' : 'login');
+        showAuthScreen((bootstrap || inviteCodeFromUrl) ? 'register' : 'login');
       }
     } catch (e) {
       showAuthScreen('login');
+    } finally {
+      if (inviteCodeFromUrl) {
+        // Code niet in de adresbalk/geschiedenis laten hangen na gebruik.
+        const cleanUrl = location.pathname + location.hash;
+        history.replaceState(null, '', cleanUrl);
+      }
     }
   })();
 })();
