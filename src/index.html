@@ -602,6 +602,7 @@
       <div style="display:flex; align-items:center; justify-content:space-between; width:100%; padding-top:4px; border-top:1px solid var(--border-soft);">
         <span id="authUserLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-top:8px;"></span>
         <div style="display:flex; gap:6px;">
+          <button class="ghost-btn" id="memoryBtn" style="flex:none; padding:6px 10px; margin-top:8px;">Geheugen</button>
           <button class="ghost-btn" id="adminBtn" style="display:none; flex:none; padding:6px 10px; margin-top:8px;">Beheer</button>
           <button class="ghost-btn" id="logoutBtn" style="flex:none; padding:6px 10px; margin-top:8px;">Uitloggen</button>
         </div>
@@ -701,6 +702,25 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="memoryOverlay" style="display:none;">
+  <div class="modal" style="max-width:460px;">
+    <h2>Geheugen</h2>
+    <div class="modal-sub">Relay leert dit automatisch bij tijdens je gesprekken — je hoeft hier niets zelf in te vullen. Na elk antwoord kijkt de AI even mee of er iets blijvends te onthouden viel, en werkt dit stil bij. Hier zie je wat er tot nu toe is opgeslagen, en kun je het zelf aanpassen of corrigeren.</div>
+
+    <div class="field">
+      <textarea id="memoryInput" rows="9" placeholder="Hier verschijnt vanzelf wat Relay over je leert naarmate je gesprekken voert." style="width:100%; resize:vertical; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:10px 11px; font-size:13.5px; line-height:1.5; outline:none;"></textarea>
+      <div class="field-hint"><span id="memoryCharCount">0</span> / 4000 tekens. Wordt bewaard bij je account, niet gedeeld met andere gebruikers. Elke keer bijwerken kost een extra, klein AI-verzoek na je bericht.</div>
+    </div>
+
+    <div id="memoryMsg" style="display:none; font-size:11.5px; margin-top:4px; margin-bottom:10px; line-height:1.4;"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="memoryCloseBtn">Sluiten</button>
+      <button class="btn btn-primary" id="memorySaveBtn">Opslaan</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="adminOverlay" style="display:none;">
   <div class="modal" style="max-width:440px;">
     <h2>Beheer toegang</h2>
@@ -747,6 +767,7 @@
   let conversation = [];   // {role: 'user'|'assistant', content}
   let editingId = null;
   let sending = false;
+  let userMemory = '';
   let currentConvId = null;
   let convIndex = [];      // [{id, title, updatedAt}], newest first
 
@@ -1209,10 +1230,10 @@
     addMessage('user', text);
     updateComposerState();
     saveCurrentConversation();
-    runTurn();
+    runTurn(text);
   }
 
-  async function runTurn(){
+  async function runTurn(lastUserText){
     sending = true;
     updateComposerState();
 
@@ -1243,6 +1264,7 @@
         sending = false;
         updateComposerState();
         saveCurrentConversation();
+        autoUpdateMemory(node, lastUserText, replyText);
         return;
       } catch (err) {
         typingEl.remove();
@@ -1294,15 +1316,23 @@
     return false;
   }
 
-  async function callProvider(node, history){
-    if (node.provider === 'anthropic') return callAnthropic(node, history);
-    if (node.provider === 'openai') return callOpenAI(node, history, 'https://api.openai.com/v1/chat/completions');
-    if (node.provider === 'google') return callGoogle(node, history);
-    if (node.provider === 'custom') return callOpenAI(node, history, node.baseUrl);
+  async function callProvider(node, history, opts){
+    opts = opts || {};
+    if (node.provider === 'anthropic') return callAnthropic(node, history, opts);
+    if (node.provider === 'openai') return callOpenAI(node, history, 'https://api.openai.com/v1/chat/completions', opts);
+    if (node.provider === 'google') return callGoogle(node, history, opts);
+    if (node.provider === 'custom') return callOpenAI(node, history, node.baseUrl, opts);
     throw new Error('Onbekende provider');
   }
 
-  async function callAnthropic(node, history){
+  async function callAnthropic(node, history, opts){
+    opts = opts || {};
+    const body = {
+      model: node.model,
+      max_tokens: node.maxOutput || 4096,
+      messages: history.map(m => ({ role: m.role, content: m.content }))
+    };
+    if (userMemory && opts.injectMemory !== false) body.system = userMemory;
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -1311,11 +1341,7 @@
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true'
       },
-      body: JSON.stringify({
-        model: node.model,
-        max_tokens: node.maxOutput || 4096,
-        messages: history.map(m => ({ role: m.role, content: m.content }))
-      })
+      body: JSON.stringify(body)
     });
     const bodyText = await res.text();
     if (!res.ok) {
@@ -1328,7 +1354,10 @@
     return (data.content || []).map(b => b.text || '').join('').trim() || '(leeg antwoord)';
   }
 
-  async function callOpenAI(node, history, url){
+  async function callOpenAI(node, history, url, opts){
+    opts = opts || {};
+    const messages = history.map(m => ({ role: m.role, content: m.content }));
+    if (userMemory && opts.injectMemory !== false) messages.unshift({ role: 'system', content: userMemory });
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -1338,7 +1367,7 @@
       body: JSON.stringify({
         model: node.model,
         max_tokens: node.maxOutput || 4096,
-        messages: history.map(m => ({ role: m.role, content: m.content }))
+        messages
       })
     });
     const bodyText = await res.text();
@@ -1352,19 +1381,22 @@
     return data.choices?.[0]?.message?.content?.trim() || '(leeg antwoord)';
   }
 
-  async function callGoogle(node, history){
+  async function callGoogle(node, history, opts){
+    opts = opts || {};
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(node.model)}:generateContent?key=${encodeURIComponent(node.apiKey)}`;
     const contents = history.map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: m.content }]
     }));
+    const body = {
+      contents,
+      generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
+    };
+    if (userMemory && opts.injectMemory !== false) body.systemInstruction = { parts: [{ text: userMemory }] };
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents,
-        generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
-      })
+      body: JSON.stringify(body)
     });
     const bodyText = await res.text();
     if (!res.ok) {
@@ -1476,7 +1508,7 @@
 
   $('logoutBtn').addEventListener('click', async () => {
     try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* ignore */ }
-    nodes = []; activeIndex = -1; conversation = []; convIndex = []; currentConvId = null;
+    nodes = []; activeIndex = -1; conversation = []; convIndex = []; currentConvId = null; userMemory = '';
     showAuthScreen('login');
   });
 
@@ -1484,6 +1516,7 @@
     hideAuthScreen(username, isAdmin);
     await loadNodesFromServer();
     await loadConvIndexFromServer();
+    await loadMemoryFromServer();
     if (convIndex.length > 0) {
       await loadConversationById(convIndex[0].id);
     } else {
@@ -1492,6 +1525,85 @@
     }
     renderNodes();
   }
+
+  // ---------- Geheugen ----------
+
+  const memoryOverlay = $('memoryOverlay');
+  const memoryInput = $('memoryInput');
+  const memoryCharCount = $('memoryCharCount');
+
+  async function loadMemoryFromServer(){
+    try {
+      const data = await apiFetch('/api/memory');
+      userMemory = data.memory || '';
+    } catch (e) { userMemory = ''; }
+  }
+
+  // Laat de zojuist-actieve AI zelf even meekijken of er iets blijvends te
+  // onthouden viel aan deze uitwisseling, en werkt het geheugen dan stil
+  // op de achtergrond bij. Geen actie van de gebruiker nodig.
+  let memoryUpdateInFlight = false;
+  async function autoUpdateMemory(node, userText, assistantText){
+    if (memoryUpdateInFlight || !userText || !assistantText) return;
+    memoryUpdateInFlight = true;
+    try {
+      const prompt =
+        'Huidig geheugen over deze gebruiker (leeg als er nog niets bekend is):\n"""\n' +
+        (userMemory || '(nog leeg)') + '\n"""\n\n' +
+        'Nieuwe uitwisseling zojuist:\nGebruiker: ' + userText + '\nJij antwoordde: ' + assistantText + '\n\n' +
+        'Werk het geheugen bij: voeg alleen blijvende, in toekomstige gesprekken bruikbare feiten toe ' +
+        '(naam, voorkeuren, lopende projecten, technische context, gewenste communicatiestijl). ' +
+        'Laat tijdelijke of gespreksspecifieke details weg. Geef ALLEEN de volledige bijgewerkte ' +
+        'geheugentekst terug, in het Nederlands, maximaal 4000 tekens, zonder uitleg, zonder opmaak, ' +
+        'zonder aanhalingstekens eromheen. Is er niets blijvends nieuws, geef dan exact de huidige tekst terug.';
+      const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
+      const cleaned = (raw || '').trim().replace(/^"+|"+$/g, '');
+      if (cleaned && cleaned.length <= 4000 && cleaned !== userMemory) {
+        userMemory = cleaned;
+        await apiFetch('/api/memory', { method: 'PUT', body: { memory: userMemory } });
+        if (memoryOverlay.style.display === 'flex') {
+          memoryInput.value = userMemory;
+          memoryCharCount.textContent = String(userMemory.length);
+        }
+      }
+    } catch (e) {
+      // Stil falen — geheugen bijwerken is een bonus, geen kernfunctie.
+      console.error('Automatisch geheugen bijwerken mislukt:', e.message);
+    } finally {
+      memoryUpdateInFlight = false;
+    }
+  }
+
+  function openMemoryModal(){
+    memoryInput.value = userMemory;
+    memoryCharCount.textContent = String(userMemory.length);
+    $('memoryMsg').style.display = 'none';
+    memoryOverlay.style.display = 'flex';
+    setTimeout(() => memoryInput.focus(), 30);
+  }
+
+  $('memoryBtn').addEventListener('click', openMemoryModal);
+  $('memoryCloseBtn').addEventListener('click', () => { memoryOverlay.style.display = 'none'; });
+  memoryOverlay.addEventListener('click', (e) => { if (e.target === memoryOverlay) memoryOverlay.style.display = 'none'; });
+  memoryInput.addEventListener('input', () => {
+    memoryCharCount.textContent = String(memoryInput.value.length);
+  });
+
+  $('memorySaveBtn').addEventListener('click', async () => {
+    const text = memoryInput.value;
+    const msgEl = $('memoryMsg');
+    try {
+      await apiFetch('/api/memory', { method: 'PUT', body: { memory: text } });
+      userMemory = text;
+      msgEl.textContent = 'Opgeslagen — gaat vanaf nu mee in elk gesprek.';
+      msgEl.style.color = 'var(--relay-green)';
+      msgEl.style.display = 'block';
+    } catch (e) {
+      msgEl.textContent = 'Opslaan mislukt: ' + e.message;
+      msgEl.style.color = 'var(--danger)';
+      msgEl.style.display = 'block';
+    }
+  });
 
   // ---------- Admin panel ----------
 
