@@ -101,6 +101,7 @@
   .conv-list{
     max-height: 132px;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     margin-bottom: 4px;
     transition: max-height .25s ease;
   }
@@ -141,10 +142,11 @@
     padding: 16px 18px 8px;
     flex: 1 1 auto;
     overflow-y:auto;
+    scrollbar-gutter: stable;
     min-height:0;
     transition: flex-grow .25s ease;
   }
-  .sidebar.chain-collapsed .chain-section{ flex-grow: 0; overflow:visible; }
+  .sidebar.chain-collapsed .chain-section{ flex-grow: 0; }
 
   .chain-toggle-btn{
     background: var(--panel-2);
