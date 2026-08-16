@@ -1501,6 +1501,24 @@
       trySend();
     }
   });
+  input.addEventListener('paste', async (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const imageItems = Array.from(items).filter(item => item.type && item.type.startsWith('image/'));
+    if (!imageItems.length) return; // gewoon tekst plakken, niets bijzonders doen
+    e.preventDefault();
+    if (attachImageBtn.disabled) return; // geen AI actief, niets te doen
+    for (const item of imageItems) {
+      if (pendingImages.length >= MAX_IMAGES_PER_MESSAGE) break;
+      const file = item.getAsFile();
+      if (!file) continue;
+      try {
+        const dataUrl = await resizeImageFile(file);
+        pendingImages.push(dataUrl);
+      } catch (err) { console.error('Plakken van afbeelding mislukt:', err.message); }
+    }
+    renderImagePreviews();
+  });
   sendBtn.addEventListener('click', trySend);
 
   function trySend(){
