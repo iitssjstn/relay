@@ -399,10 +399,17 @@
     height:100%;
     position:relative;
   }
+  .messages-wrap{
+    position:relative;
+    flex:1;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+  }
   .scroll-bottom-btn{
     display:none;
     position:absolute;
-    left:50%; bottom:96px;
+    left:50%; bottom:16px;
     transform: translateX(-50%) translateY(8px);
     width:38px; height:38px; border-radius:50%;
     background: var(--panel-2); border:1px solid var(--border);
@@ -459,6 +466,7 @@
 
   .messages{
     flex:1;
+    min-height:0;
     overflow-y:auto;
     padding: 22px 24px;
     display:flex; flex-direction:column; gap:16px;
@@ -850,13 +858,15 @@
       </div>
     </div>
 
-    <div class="messages" id="messages">
-      <div class="empty-state" id="emptyState">
-        <div class="empty-state-mark">◇</div>
-        <p>Nog geen AI ingesteld. Klik links op <strong>"AI toevoegen aan de ketting"</strong>, vul een API-key en model in, en begin het gesprek. Voeg gerust meerdere AI's toe — Relay schakelt automatisch door als de actieve AI zijn contextlimiet bereikt.</p>
+    <div class="messages-wrap">
+      <div class="messages" id="messages">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-state-mark">◇</div>
+          <p>Nog geen AI ingesteld. Klik links op <strong>"AI toevoegen aan de ketting"</strong>, vul een API-key en model in, en begin het gesprek. Voeg gerust meerdere AI's toe — Relay schakelt automatisch door als de actieve AI zijn contextlimiet bereikt.</p>
+        </div>
       </div>
+      <button class="scroll-bottom-btn" id="scrollBottomBtn" title="Naar beneden scrollen" aria-label="Naar beneden scrollen">↓</button>
     </div>
-    <button class="scroll-bottom-btn" id="scrollBottomBtn" title="Naar beneden scrollen" aria-label="Naar beneden scrollen">↓</button>
 
     <div class="composer">
       <div class="image-preview-strip" id="imagePreviewStrip" style="display:none;"></div>
