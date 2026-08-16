@@ -243,6 +243,13 @@
     margin-top:5px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
+  .node-quota{
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    margin-top:4px;
+  }
+  .node-quota.low{ color: var(--amber); }
   .node-meta{
     display:flex; justify-content:space-between; align-items:center;
     margin-top:7px;
@@ -884,9 +891,9 @@
   }
 
   async function saveNodes(){
-    // coolDownUntil is puur een tijdelijke, lokale hint voor deze sessie —
-    // hoort niet in de opgeslagen server-config terecht te komen.
-    const cleanNodes = nodes.map(({ coolDownUntil, ...rest }) => rest);
+    // coolDownUntil en rateLimitInfo zijn puur tijdelijke, lokale hints voor
+    // deze sessie — horen niet in de opgeslagen server-config terecht te komen.
+    const cleanNodes = nodes.map(({ coolDownUntil, rateLimitInfo, ...rest }) => rest);
     try { await apiFetch('/api/nodes', { method: 'PUT', body: { nodes: cleanNodes, activeIndex } }); }
     catch (e) { console.error('Instellingen opslaan mislukt:', e.message); }
   }
@@ -894,7 +901,7 @@
   async function loadNodesFromServer(){
     try {
       const data = await apiFetch('/api/nodes');
-      nodes = (data.nodes || []).map(n => ({ ...n, status: 'queued' }));
+      nodes = (data.nodes || []).map(n => ({ ...n, status: 'queued', rateLimitInfo: null }));
       activeIndex = typeof data.activeIndex === 'number' ? data.activeIndex : (nodes.length ? 0 : -1);
     } catch (e) { /* auth redirect already handled inside apiFetch */ }
   }
@@ -1021,6 +1028,29 @@
     saveNodes();
   }
 
+  function formatQuotaNumber(n){
+    if (n >= 1000000) return (n / 1000000).toFixed(1).replace('.0', '') + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1).replace('.0', '') + 'k';
+    return String(n);
+  }
+
+  function formatQuotaLine(info){
+    if (!info) return '';
+    const parts = [];
+    let lowest = 1;
+    if (info.requestsRemaining != null && info.requestsLimit) {
+      parts.push(formatQuotaNumber(info.requestsRemaining) + '/' + formatQuotaNumber(info.requestsLimit) + ' req');
+      lowest = Math.min(lowest, info.requestsRemaining / info.requestsLimit);
+    }
+    if (info.tokensRemaining != null && info.tokensLimit) {
+      parts.push(formatQuotaNumber(info.tokensRemaining) + '/' + formatQuotaNumber(info.tokensLimit) + ' tok');
+      lowest = Math.min(lowest, info.tokensRemaining / info.tokensLimit);
+    }
+    if (!parts.length) return '';
+    const lowClass = lowest < 0.15 ? ' low' : '';
+    return `<div class="node-quota${lowClass}">${parts.join(' · ')} over</div>`;
+  }
+
   function renderNodes(){
     nodeList.innerHTML = '';
     chainCount.textContent = nodes.length ? nodes.length + ' AI' + (nodes.length > 1 ? "'s" : '') : '';
@@ -1033,6 +1063,7 @@
         : node.status === 'error' ? 'fout opgetreden — klik om opnieuw te proberen'
         : 'klik om deze AI te gebruiken';
       el.title = i === activeIndex ? '' : 'Klik om over te schakelen naar ' + node.name;
+      const quotaHtml = formatQuotaLine(node.rateLimitInfo);
       el.innerHTML = `
         <div class="node-connector"></div>
         <div class="node-top">
@@ -1041,6 +1072,7 @@
         </div>
         <div class="node-provider">${node.provider}</div>
         <div class="node-model">${escapeHtml(node.model || '(geen model ingesteld)')}</div>
+        ${quotaHtml}
         <div class="node-meta">
           <span class="node-status-text">${statusText}</span>
           <span class="node-actions">
@@ -1460,6 +1492,36 @@
 
   // ---------- Provider adapters ----------
 
+  // Leest de standaard rate-limit-headers uit een response, indien
+  // aanwezig. Anthropic en de meeste OpenAI-compatibele providers sturen
+  // dit standaard mee; Google Gemini doet dit niet.
+  function extractRateLimitInfo(res, providerType){
+    const h = res.headers;
+    let reqRemaining, reqLimit, tokRemaining, tokLimit, resetIn;
+    if (providerType === 'anthropic') {
+      reqRemaining = h.get('anthropic-ratelimit-requests-remaining');
+      reqLimit = h.get('anthropic-ratelimit-requests-limit');
+      tokRemaining = h.get('anthropic-ratelimit-tokens-remaining') || h.get('anthropic-ratelimit-input-tokens-remaining');
+      tokLimit = h.get('anthropic-ratelimit-tokens-limit') || h.get('anthropic-ratelimit-input-tokens-limit');
+      resetIn = h.get('anthropic-ratelimit-tokens-reset') || h.get('anthropic-ratelimit-requests-reset');
+    } else {
+      reqRemaining = h.get('x-ratelimit-remaining-requests');
+      reqLimit = h.get('x-ratelimit-limit-requests');
+      tokRemaining = h.get('x-ratelimit-remaining-tokens');
+      tokLimit = h.get('x-ratelimit-limit-tokens');
+      resetIn = h.get('x-ratelimit-reset-tokens') || h.get('x-ratelimit-reset-requests');
+    }
+    if (reqRemaining == null && tokRemaining == null) return null;
+    return {
+      requestsRemaining: reqRemaining != null ? Number(reqRemaining) : null,
+      requestsLimit: reqLimit != null ? Number(reqLimit) : null,
+      tokensRemaining: tokRemaining != null ? Number(tokRemaining) : null,
+      tokensLimit: tokLimit != null ? Number(tokLimit) : null,
+      resetIn: resetIn || null,
+      checkedAt: Date.now()
+    };
+  }
+
   function isContextLimitError(providerType, status, bodyText){
     const t = (bodyText || '').toLowerCase();
     if (status === 413) return true;
@@ -1530,6 +1592,8 @@
       },
       body: JSON.stringify(body)
     });
+    const rlInfo1 = extractRateLimitInfo(res, 'anthropic');
+    if (rlInfo1) node.rateLimitInfo = rlInfo1;
     if (!res.ok) {
       const bodyText = await res.text();
       if (isContextLimitError('anthropic', res.status, bodyText)) {
@@ -1569,6 +1633,8 @@
         stream: true
       })
     });
+    const rlInfo2 = extractRateLimitInfo(res, 'openai');
+    if (rlInfo2) node.rateLimitInfo = rlInfo2;
     if (!res.ok) {
       const bodyText = await res.text();
       if (isContextLimitError('openai', res.status, bodyText)) {
