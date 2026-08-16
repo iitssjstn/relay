@@ -1000,6 +1000,17 @@
   const input = $('input');
   const sendBtn = $('sendBtn');
   const activeBadge = $('activeBadge');
+
+  // Blijf alleen automatisch meescrollen zolang de gebruiker niet zelf
+  // heeft weggescrold — niet opnieuw bepalen bij elke losse update op
+  // basis van "hoe dicht sta ik nu bij de onderkant", want dat duwt je
+  // tijdens het streamen steeds terug voordat je écht kunt wegscrollen.
+  let autoScrollToBottom = true;
+  messagesEl.addEventListener('scroll', () => {
+    const distanceFromBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+    autoScrollToBottom = distanceFromBottom < 40;
+  });
+
   const chainCount = $('chainCount');
   const convListEl = $('convList');
   const sidebarEl = $('sidebar');
@@ -1189,6 +1200,7 @@
   }
 
   function renderFullConversation(){
+    autoScrollToBottom = true;
     messagesEl.innerHTML = '';
     if (conversation.length === 0) {
       messagesEl.appendChild(emptyState);
@@ -1461,16 +1473,33 @@
     messagesEl.appendChild(wrap);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     const bubbleEl = wrap.querySelector('.bubble');
-    let started = false;
+
+    // Bij snelle providers komen er soms tientallen tekstfragmenten per
+    // seconde binnen. Elke DOM-aanpassing daarvan onderbreekt een actief
+    // scrollgebaar (vooral merkbaar op mobiel) — daarom schrijven we
+    // hooguit één keer per animatieframe naar het scherm, in plaats van
+    // bij elk los fragment.
+    let pendingText = null;
+    let frameScheduled = false;
+    function flush(){
+      frameScheduled = false;
+      if (pendingText === null) return;
+      bubbleEl.innerHTML = renderMarkdownSafe(pendingText) + '<span class="stream-cursor"></span>';
+      pendingText = null;
+      if (autoScrollToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
     return {
       wrap,
       update(text){
-        started = true;
-        const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
-        bubbleEl.innerHTML = renderMarkdownSafe(text) + '<span class="stream-cursor"></span>';
-        if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+        pendingText = text;
+        if (!frameScheduled) {
+          frameScheduled = true;
+          requestAnimationFrame(flush);
+        }
       },
       finish(text){
+        pendingText = null;
         bubbleEl.innerHTML = renderMarkdownSafe(text || '(leeg antwoord)');
         addCopyButton(bubbleEl, text || '(leeg antwoord)');
       },
@@ -1643,6 +1672,7 @@
     renderImagePreviews();
     input.value = '';
     input.style.height = 'auto';
+    autoScrollToBottom = true;
     const msg = { role: 'user', content: text };
     if (images.length) msg.images = images;
     conversation.push(msg);
