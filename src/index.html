@@ -462,6 +462,14 @@
   .typing span:nth-child(3){ animation-delay: .4s; }
   @keyframes blink{ 0%,80%,100%{ opacity:.25 } 40%{ opacity:1 } }
 
+  .stream-cursor{
+    display:inline-block; width:7px; height:1em;
+    background: var(--relay-green);
+    vertical-align: text-bottom; margin-left:1px; border-radius:1px;
+    animation: cursor-blink .9s steps(2) infinite;
+  }
+  @keyframes cursor-blink{ 50%{ opacity:0; } }
+
   .composer{
     border-top: 1px solid var(--border-soft);
     padding: 14px 24px 18px;
@@ -1174,6 +1182,40 @@
     return wrap;
   }
 
+  // Live streaming-bubbel: begint met een knipperende dot-indicator (zoals
+  // addTypingIndicator), en groeit vervolgens live mee terwijl er tekst
+  // binnenkomt — met een blinkende cursor tot het antwoord klaar is.
+  function beginStreamingMessage(providerName){
+    if (emptyState.parentElement) emptyState.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'msg assistant';
+    wrap.innerHTML = `
+      <div class="avatar">${providerName.slice(0,2).toUpperCase()}</div>
+      <div>
+        <div class="msg-meta">${escapeHtml(providerName)}</div>
+        <div class="bubble markdown"><span class="typing"><span></span><span></span><span></span></span></div>
+      </div>
+    `;
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const bubbleEl = wrap.querySelector('.bubble');
+    let started = false;
+    return {
+      wrap,
+      update(text){
+        started = true;
+        const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+        bubbleEl.innerHTML = renderMarkdownSafe(text) + '<span class="stream-cursor"></span>';
+        if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+      },
+      finish(text){
+        bubbleEl.innerHTML = renderMarkdownSafe(text || '(leeg antwoord)');
+        addCopyButton(bubbleEl, text || '(leeg antwoord)');
+      },
+      remove(){ wrap.remove(); }
+    };
+  }
+
   // ---------- Modal ----------
 
   function openModal(node){
@@ -1354,15 +1396,16 @@
 
       node.status = 'active';
       renderNodes();
-      const typingEl = addTypingIndicator(node.name);
+      const streamHandle = beginStreamingMessage(node.name);
 
       try {
-        const replyText = await callProvider(node, conversation);
-        typingEl.remove();
+        const replyText = await callProvider(node, conversation, {}, (partial) => {
+          streamHandle.update(partial);
+        });
+        streamHandle.finish(replyText);
         node.status = 'done';
         node.coolDownUntil = null;
         conversation.push({ role: 'assistant', content: replyText, providerName: node.name });
-        addMessage('assistant', replyText, { providerName: node.name });
         renderNodes();
         sending = false;
         updateComposerState();
@@ -1370,7 +1413,7 @@
         autoUpdateMemory(node, lastUserText, replyText);
         return;
       } catch (err) {
-        typingEl.remove();
+        streamHandle.remove();
         if (err.isContextLimit) {
           const handedOff = handOffToNext(node, 'contextlimiet bereikt bij ' + node.name);
           if (!handedOff) {
@@ -1436,21 +1479,45 @@
     return false;
   }
 
-  async function callProvider(node, history, opts){
+  async function callProvider(node, history, opts, onChunk){
     opts = opts || {};
-    if (node.provider === 'anthropic') return callAnthropic(node, history, opts);
-    if (node.provider === 'openai') return callOpenAI(node, history, 'https://api.openai.com/v1/chat/completions', opts);
-    if (node.provider === 'google') return callGoogle(node, history, opts);
-    if (node.provider === 'custom') return callOpenAI(node, history, node.baseUrl, opts);
+    if (node.provider === 'anthropic') return callAnthropic(node, history, opts, onChunk);
+    if (node.provider === 'openai') return callOpenAI(node, history, 'https://api.openai.com/v1/chat/completions', opts, onChunk);
+    if (node.provider === 'google') return callGoogle(node, history, opts, onChunk);
+    if (node.provider === 'custom') return callOpenAI(node, history, node.baseUrl, opts, onChunk);
     throw new Error('Onbekende provider');
   }
 
-  async function callAnthropic(node, history, opts){
+  // Leest een Server-Sent-Events response regel voor regel en roept
+  // onEvent aan met elk geparste JSON-object. Gedeeld door alle drie de
+  // providers hieronder, die elk hun eigen event-vorm hebben.
+  async function streamSSE(res, onEvent){
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // laatste, mogelijk onvolledige regel bewaren voor de volgende chunk
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const data = trimmed.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        try { onEvent(JSON.parse(data)); } catch (e) { /* onvolledig/kapot fragment overslaan */ }
+      }
+    }
+  }
+
+  async function callAnthropic(node, history, opts, onChunk){
     opts = opts || {};
     const body = {
       model: node.model,
       max_tokens: node.maxOutput || 4096,
-      messages: history.map(m => ({ role: m.role, content: m.content }))
+      messages: history.map(m => ({ role: m.role, content: m.content })),
+      stream: true
     };
     if (userMemory && opts.injectMemory !== false) body.system = userMemory;
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1463,8 +1530,8 @@
       },
       body: JSON.stringify(body)
     });
-    const bodyText = await res.text();
     if (!res.ok) {
+      const bodyText = await res.text();
       if (isContextLimitError('anthropic', res.status, bodyText)) {
         const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
       }
@@ -1473,11 +1540,19 @@
       }
       throw new Error(parseErrMsg(bodyText, res.status));
     }
-    const data = JSON.parse(bodyText);
-    return (data.content || []).map(b => b.text || '').join('').trim() || '(leeg antwoord)';
+    let full = '';
+    await streamSSE(res, (evt) => {
+      if (evt.type === 'content_block_delta' && evt.delta && typeof evt.delta.text === 'string') {
+        full += evt.delta.text;
+        if (onChunk) onChunk(full);
+      } else if (evt.type === 'error' && evt.error) {
+        throw new Error(evt.error.message || 'Streamingfout');
+      }
+    });
+    return full.trim() || '(leeg antwoord)';
   }
 
-  async function callOpenAI(node, history, url, opts){
+  async function callOpenAI(node, history, url, opts, onChunk){
     opts = opts || {};
     const messages = history.map(m => ({ role: m.role, content: m.content }));
     if (userMemory && opts.injectMemory !== false) messages.unshift({ role: 'system', content: userMemory });
@@ -1490,11 +1565,12 @@
       body: JSON.stringify({
         model: node.model,
         max_tokens: node.maxOutput || 4096,
-        messages
+        messages,
+        stream: true
       })
     });
-    const bodyText = await res.text();
     if (!res.ok) {
+      const bodyText = await res.text();
       if (isContextLimitError('openai', res.status, bodyText)) {
         const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
       }
@@ -1503,13 +1579,20 @@
       }
       throw new Error(parseErrMsg(bodyText, res.status));
     }
-    const data = JSON.parse(bodyText);
-    return data.choices?.[0]?.message?.content?.trim() || '(leeg antwoord)';
+    let full = '';
+    await streamSSE(res, (evt) => {
+      const delta = evt.choices?.[0]?.delta?.content;
+      if (typeof delta === 'string' && delta) {
+        full += delta;
+        if (onChunk) onChunk(full);
+      }
+    });
+    return full.trim() || '(leeg antwoord)';
   }
 
-  async function callGoogle(node, history, opts){
+  async function callGoogle(node, history, opts, onChunk){
     opts = opts || {};
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(node.model)}:generateContent?key=${encodeURIComponent(node.apiKey)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(node.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(node.apiKey)}`;
     const contents = history.map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: m.content }]
@@ -1524,8 +1607,8 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    const bodyText = await res.text();
     if (!res.ok) {
+      const bodyText = await res.text();
       if (isContextLimitError('google', res.status, bodyText)) {
         const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
       }
@@ -1534,9 +1617,16 @@
       }
       throw new Error(parseErrMsg(bodyText, res.status));
     }
-    const data = JSON.parse(bodyText);
-    const parts = data.candidates?.[0]?.content?.parts || [];
-    return parts.map(p => p.text || '').join('').trim() || '(leeg antwoord)';
+    let full = '';
+    await streamSSE(res, (evt) => {
+      const parts = evt.candidates?.[0]?.content?.parts || [];
+      const deltaText = parts.map(p => p.text || '').join('');
+      if (deltaText) {
+        full += deltaText;
+        if (onChunk) onChunk(full);
+      }
+    });
+    return full.trim() || '(leeg antwoord)';
   }
 
   function parseErrMsg(bodyText, status){
