@@ -397,7 +397,29 @@
     display:flex; flex-direction:column;
     min-height:0;
     height:100%;
+    position:relative;
   }
+  .scroll-bottom-btn{
+    display:none;
+    position:absolute;
+    left:50%; bottom:96px;
+    transform: translateX(-50%) translateY(8px);
+    width:38px; height:38px; border-radius:50%;
+    background: var(--panel-2); border:1px solid var(--border);
+    color: var(--text-dim); font-size:16px;
+    align-items:center; justify-content:center;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+    opacity:0;
+    transition: opacity .15s ease, transform .15s ease, color .15s ease, border-color .15s ease;
+    z-index:15;
+  }
+  .scroll-bottom-btn.show{
+    display:flex;
+    opacity:1;
+    transform: translateX(-50%) translateY(0);
+  }
+  .scroll-bottom-btn:hover{ color: var(--text); border-color: var(--text-faint); }
+
   .chat-header{
     padding: 14px 24px;
     border-bottom: 1px solid var(--border-soft);
@@ -834,6 +856,7 @@
         <p>Nog geen AI ingesteld. Klik links op <strong>"AI toevoegen aan de ketting"</strong>, vul een API-key en model in, en begin het gesprek. Voeg gerust meerdere AI's toe — Relay schakelt automatisch door als de actieve AI zijn contextlimiet bereikt.</p>
       </div>
     </div>
+    <button class="scroll-bottom-btn" id="scrollBottomBtn" title="Naar beneden scrollen" aria-label="Naar beneden scrollen">↓</button>
 
     <div class="composer">
       <div class="image-preview-strip" id="imagePreviewStrip" style="display:none;"></div>
@@ -1006,10 +1029,32 @@
   // basis van "hoe dicht sta ik nu bij de onderkant", want dat duwt je
   // tijdens het streamen steeds terug voordat je écht kunt wegscrollen.
   let autoScrollToBottom = true;
+  let programmaticScroll = false;
+  const scrollBottomBtn = $('scrollBottomBtn');
+
+  function updateScrollBottomBtn(){
+    scrollBottomBtn.classList.toggle('show', !autoScrollToBottom);
+  }
+
+  function scrollMessagesToBottom(){
+    programmaticScroll = true;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    autoScrollToBottom = true;
+    updateScrollBottomBtn();
+  }
+
   messagesEl.addEventListener('scroll', () => {
+    if (programmaticScroll) { programmaticScroll = false; return; }
+    // Dit is dus een échte, door de gebruiker veroorzaakte scrollbeweging.
+    // Bijna precies onderaan (<4px) telt als "weer aangehaakt"; elke
+    // andere positie — ook een klein stukje omhoog — betekent dat de
+    // gebruiker zelf de regie heeft genomen.
     const distanceFromBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
-    autoScrollToBottom = distanceFromBottom < 40;
+    autoScrollToBottom = distanceFromBottom < 4;
+    updateScrollBottomBtn();
   });
+
+  scrollBottomBtn.addEventListener('click', scrollMessagesToBottom);
 
   const chainCount = $('chainCount');
   const convListEl = $('convList');
@@ -1201,6 +1246,7 @@
 
   function renderFullConversation(){
     autoScrollToBottom = true;
+    updateScrollBottomBtn();
     messagesEl.innerHTML = '';
     if (conversation.length === 0) {
       messagesEl.appendChild(emptyState);
@@ -1436,7 +1482,7 @@
       if (content) addCopyButton(wrap.querySelector('.bubble'), content);
     }
     messagesEl.appendChild(wrap);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (autoScrollToBottom) scrollMessagesToBottom();
     return wrap;
   }
 
@@ -1452,7 +1498,7 @@
       </div>
     `;
     messagesEl.appendChild(wrap);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (autoScrollToBottom) scrollMessagesToBottom();
     return wrap;
   }
 
@@ -1471,7 +1517,7 @@
       </div>
     `;
     messagesEl.appendChild(wrap);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (autoScrollToBottom) scrollMessagesToBottom();
     const bubbleEl = wrap.querySelector('.bubble');
 
     // Bij snelle providers komen er soms tientallen tekstfragmenten per
@@ -1486,7 +1532,7 @@
       if (pendingText === null) return;
       bubbleEl.innerHTML = renderMarkdownSafe(pendingText) + '<span class="stream-cursor"></span>';
       pendingText = null;
-      if (autoScrollToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+      if (autoScrollToBottom) scrollMessagesToBottom();
     }
 
     return {
@@ -1673,6 +1719,7 @@
     input.value = '';
     input.style.height = 'auto';
     autoScrollToBottom = true;
+    updateScrollBottomBtn();
     const msg = { role: 'user', content: text };
     if (images.length) msg.images = images;
     conversation.push(msg);
