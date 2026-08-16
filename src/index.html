@@ -521,6 +521,40 @@
   }
   .composer-hint a{ color: var(--text-faint); text-decoration: underline; }
 
+  .attach-btn{
+    background:none; border:none; color: var(--text-faint);
+    font-size:17px; padding:6px 7px; border-radius:8px;
+    flex-shrink:0; align-self:flex-end; margin-bottom:2px;
+    transition: color .15s, background .15s;
+  }
+  .attach-btn:hover{ color: var(--text); background: var(--border-soft); }
+  .attach-btn:disabled{ opacity:0.35; cursor:not-allowed; }
+
+  .image-preview-strip{
+    display:flex; gap:8px; flex-wrap:wrap;
+    padding: 0 2px 10px;
+  }
+  .image-preview-item{
+    position:relative; width:56px; height:56px;
+    border-radius:8px; overflow:hidden; border:1px solid var(--border);
+    flex-shrink:0;
+  }
+  .image-preview-item img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .image-preview-remove{
+    position:absolute; top:2px; right:2px; width:16px; height:16px;
+    border-radius:50%; background:rgba(0,0,0,0.65); color:#fff; border:none;
+    font-size:10px; line-height:16px; padding:0; cursor:pointer;
+  }
+
+  .bubble-images{
+    display:flex; gap:6px; flex-wrap:wrap; margin-bottom: 8px;
+  }
+  .bubble-images img{
+    max-width:200px; max-height:200px; border-radius:8px;
+    border:1px solid var(--border-soft); display:block; object-fit:cover;
+    cursor: zoom-in;
+  }
+
   /* Modal */
   .modal-overlay{
     position:fixed; inset:0; background: rgba(6,8,11,0.72);
@@ -690,11 +724,14 @@
     </div>
 
     <div class="composer">
+      <div class="image-preview-strip" id="imagePreviewStrip" style="display:none;"></div>
       <div class="composer-box">
+        <button class="attach-btn" id="attachImageBtn" title="Afbeelding bijvoegen" disabled>📎</button>
+        <input type="file" id="imageInput" accept="image/*" multiple style="display:none">
         <textarea id="input" rows="1" placeholder="Typ je vraag..." disabled></textarea>
         <button class="send-btn" id="sendBtn" disabled>↑</button>
       </div>
-      <div class="composer-hint">API-keys en gesprekken worden bewaard bij jouw account op deze Relay-server, en je berichten gaan rechtstreeks naar de AI-provider die je zelf kiest. Log volgende keer gewoon in om verder te gaan.</div>
+      <div class="composer-hint">API-keys en gesprekken worden bewaard bij jouw account op deze Relay-server, en je berichten (inclusief afbeeldingen) gaan rechtstreeks naar de AI-provider die je zelf kiest. Log volgende keer gewoon in om verder te gaan.</div>
     </div>
   </main>
 </div>
@@ -836,12 +873,13 @@
 
   let nodes = [];          // {id, provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, status}
   let activeIndex = -1;    // index in nodes[] currently handling the conversation
-  let conversation = [];   // {role: 'user'|'assistant', content}
+  let conversation = [];   // {role: 'user'|'assistant', content, images?: [dataUrl,...]}
   let editingId = null;
   let sending = false;
   let userMemory = '';
   let currentConvId = null;
   let convIndex = [];      // [{id, title, updatedAt}], newest first
+  let pendingImages = [];  // dataURLs, klaar om met het volgende bericht mee te sturen
 
   const $ = (id) => document.getElementById(id);
   const nodeList = $('nodeList');
@@ -855,6 +893,75 @@
   const sidebarEl = $('sidebar');
   const chainBodyWrap = $('chainBodyWrap');
   const chainToggleBtn = $('chainToggleBtn');
+  const attachImageBtn = $('attachImageBtn');
+  const imageInput = $('imageInput');
+  const imagePreviewStrip = $('imagePreviewStrip');
+
+  const MAX_IMAGES_PER_MESSAGE = 4;
+
+  function resizeImageFile(file, maxDim, quality){
+    maxDim = maxDim || 1568; // ruim boven wat vision-modellen nuttig gebruiken
+    quality = quality || 0.82;
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Bestand kon niet worden gelezen.'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('Geen geldige afbeelding.'));
+        img.onload = () => {
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            const scale = maxDim / Math.max(width, height);
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width; canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderImagePreviews(){
+    if (!pendingImages.length) {
+      imagePreviewStrip.style.display = 'none';
+      imagePreviewStrip.innerHTML = '';
+      updateComposerState();
+      return;
+    }
+    imagePreviewStrip.style.display = 'flex';
+    imagePreviewStrip.innerHTML = pendingImages.map((src, i) => `
+      <div class="image-preview-item">
+        <img src="${src}" alt="">
+        <button class="image-preview-remove" data-idx="${i}" title="Verwijderen">✕</button>
+      </div>
+    `).join('');
+    imagePreviewStrip.querySelectorAll('.image-preview-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        pendingImages.splice(Number(btn.dataset.idx), 1);
+        renderImagePreviews();
+      });
+    });
+    updateComposerState();
+  }
+
+  attachImageBtn.addEventListener('click', () => imageInput.click());
+  imageInput.addEventListener('change', async () => {
+    const files = Array.from(imageInput.files || []).slice(0, MAX_IMAGES_PER_MESSAGE - pendingImages.length);
+    imageInput.value = '';
+    for (const file of files) {
+      try {
+        const dataUrl = await resizeImageFile(file);
+        pendingImages.push(dataUrl);
+      } catch (e) { console.error('Afbeelding overslaan:', e.message); }
+    }
+    renderImagePreviews();
+  });
 
   let chainCollapsed = false;
   chainToggleBtn.addEventListener('click', () => {
@@ -974,7 +1081,7 @@
       return;
     }
     conversation.forEach(m => {
-      if (m.role === 'user') addMessage('user', m.content);
+      if (m.role === 'user') addMessage('user', m.content, { images: m.images });
       else addMessage('assistant', m.content, { providerName: m.providerName || 'AI' });
     });
   }
@@ -1014,7 +1121,12 @@
   }
 
   function conversationTokenEstimate(){
-    return conversation.reduce((sum, m) => sum + estimateTokens(m.content), 200);
+    // Afbeeldingen kosten geen tekens maar wel echte tokens bij vision-
+    // modellen; ~1500 tokens per afbeelding is een gangbare vuistregel.
+    return conversation.reduce((sum, m) => {
+      const imgTokens = (m.images && m.images.length) ? m.images.length * 1500 : 0;
+      return sum + estimateTokens(m.content) + imgTokens;
+    }, 200);
   }
 
   // ---------- Rendering ----------
@@ -1121,7 +1233,8 @@
     const ready = nodes.length > 0 && !sending;
     const wasDisabled = input.disabled;
     input.disabled = !ready;
-    sendBtn.disabled = !ready || !input.value.trim();
+    attachImageBtn.disabled = !ready;
+    sendBtn.disabled = !ready || (!input.value.trim() && !pendingImages.length);
     if (ready && wasDisabled) {
       // Het veld verloor de focus toen het disabled werd tijdens het
       // versturen — die krijgt de browser niet vanzelf terug, dus
@@ -1181,9 +1294,12 @@
       wrap.innerHTML = `<div class="bubble">${escapeHtml(content)}</div>`;
     } else {
       const avatarLabel = role === 'user' ? 'JIJ' : (opts.providerName ? opts.providerName.slice(0,2).toUpperCase() : 'AI');
+      const imagesHtml = (opts.images && opts.images.length)
+        ? `<div class="bubble-images">${opts.images.map(src => `<img src="${src}" alt="Bijgevoegde afbeelding" onclick="window.open(this.src, '_blank')">`).join('')}</div>`
+        : '';
       const bubbleHtml = role === 'assistant'
-        ? `<div class="bubble markdown">${renderMarkdownSafe(content)}</div>`
-        : `<div class="bubble">${escapeHtml(content)}</div>`;
+        ? `<div class="bubble markdown">${imagesHtml}${renderMarkdownSafe(content)}</div>`
+        : `<div class="bubble">${imagesHtml}${escapeHtml(content)}</div>`;
       wrap.innerHTML = `
         <div class="avatar">${avatarLabel}</div>
         <div>
@@ -1191,7 +1307,7 @@
           ${bubbleHtml}
         </div>
       `;
-      addCopyButton(wrap.querySelector('.bubble'), content);
+      if (content) addCopyButton(wrap.querySelector('.bubble'), content);
     }
     messagesEl.appendChild(wrap);
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1389,11 +1505,16 @@
 
   function trySend(){
     const text = input.value.trim();
-    if (!text || sending || activeIndex === -1) return;
+    if ((!text && !pendingImages.length) || sending || activeIndex === -1) return;
+    const images = pendingImages.slice();
+    pendingImages = [];
+    renderImagePreviews();
     input.value = '';
     input.style.height = 'auto';
-    conversation.push({ role: 'user', content: text });
-    addMessage('user', text);
+    const msg = { role: 'user', content: text };
+    if (images.length) msg.images = images;
+    conversation.push(msg);
+    addMessage('user', text, { images });
     updateComposerState();
     saveCurrentConversation();
     runTurn(text);
@@ -1492,6 +1613,45 @@
 
   // ---------- Provider adapters ----------
 
+  // Elke provider verwacht afbeeldingen op een net iets andere manier in
+  // het bericht. Deze helpers zetten een {content, images} bericht om naar
+  // de juiste vorm; zonder afbeeldingen blijft het gewoon platte tekst
+  // (kleinere payload, en compatibel met hoe het al werkte).
+  function splitDataUrl(dataUrl){
+    const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/.exec(dataUrl || '');
+    return m ? { mediaType: m[1], base64: m[2] } : null;
+  }
+
+  function anthropicMessageContent(m){
+    if (!m.images || !m.images.length) return m.content;
+    const blocks = [];
+    if (m.content) blocks.push({ type: 'text', text: m.content });
+    m.images.forEach(dataUrl => {
+      const parsed = splitDataUrl(dataUrl);
+      if (parsed) blocks.push({ type: 'image', source: { type: 'base64', media_type: parsed.mediaType, data: parsed.base64 } });
+    });
+    return blocks;
+  }
+
+  function openAIMessageContent(m){
+    if (!m.images || !m.images.length) return m.content;
+    const blocks = [];
+    if (m.content) blocks.push({ type: 'text', text: m.content });
+    m.images.forEach(dataUrl => blocks.push({ type: 'image_url', image_url: { url: dataUrl } }));
+    return blocks;
+  }
+
+  function googleMessageParts(m){
+    const parts = [];
+    if (m.content) parts.push({ text: m.content });
+    (m.images || []).forEach(dataUrl => {
+      const parsed = splitDataUrl(dataUrl);
+      if (parsed) parts.push({ inline_data: { mime_type: parsed.mediaType, data: parsed.base64 } });
+    });
+    if (!parts.length) parts.push({ text: '' });
+    return parts;
+  }
+
   // Leest de standaard rate-limit-headers uit een response, indien
   // aanwezig. Anthropic en de meeste OpenAI-compatibele providers sturen
   // dit standaard mee; Google Gemini doet dit niet.
@@ -1578,7 +1738,7 @@
     const body = {
       model: node.model,
       max_tokens: node.maxOutput || 4096,
-      messages: history.map(m => ({ role: m.role, content: m.content })),
+      messages: history.map(m => ({ role: m.role, content: anthropicMessageContent(m) })),
       stream: true
     };
     if (userMemory && opts.injectMemory !== false) body.system = userMemory;
@@ -1618,7 +1778,7 @@
 
   async function callOpenAI(node, history, url, opts, onChunk){
     opts = opts || {};
-    const messages = history.map(m => ({ role: m.role, content: m.content }));
+    const messages = history.map(m => ({ role: m.role, content: openAIMessageContent(m) }));
     if (userMemory && opts.injectMemory !== false) messages.unshift({ role: 'system', content: userMemory });
     const res = await fetch(url, {
       method: 'POST',
@@ -1661,7 +1821,7 @@
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(node.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(node.apiKey)}`;
     const contents = history.map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }]
+      parts: googleMessageParts(m)
     }));
     const body = {
       contents,
