@@ -2,8 +2,18 @@
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Relay — multi-AI chatketen</title>
+
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0c0f14">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Relay">
+<meta name="mobile-web-app-capable" content="yes">
+
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
@@ -60,6 +70,32 @@
     .app{ grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; min-height: 100vh; }
     .sidebar{ max-height: 40vh; overflow-y:auto; }
   }
+
+  /* Installatiebanner (PWA) */
+  .install-banner{
+    display:none;
+    align-items:center; gap:12px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    font-size: 12.5px;
+  }
+  .install-banner.show{ display:flex; }
+  .install-banner-icon{
+    width:30px; height:30px; border-radius:8px; flex-shrink:0;
+  }
+  .install-banner-text{ flex:1; color: var(--text-dim); line-height:1.4; }
+  .install-banner-text strong{ color: var(--text); }
+  .install-banner-actions{ display:flex; gap:6px; flex-shrink:0; }
+  .install-banner-btn{
+    background: var(--amber); color:#1a1305; border:none;
+    padding: 6px 12px; border-radius:7px; font-size:12px; font-weight:600;
+  }
+  .install-banner-dismiss{
+    background:none; border:none; color: var(--text-faint);
+    padding: 6px 8px; font-size:12px;
+  }
+  .install-banner-dismiss:hover{ color: var(--text); }
 
   /* Sidebar */
   .sidebar{
@@ -632,6 +668,15 @@
 </style>
 </head>
 <body>
+
+<div class="install-banner" id="installBanner">
+  <img class="install-banner-icon" src="/icons/icon-192.png" alt="">
+  <div class="install-banner-text" id="installBannerText"><strong>Relay</strong> installeren als app op dit toestel?</div>
+  <div class="install-banner-actions">
+    <button class="install-banner-btn" id="installBannerBtn">Installeren</button>
+    <button class="install-banner-dismiss" id="installBannerDismissBtn">✕</button>
+  </div>
+</div>
 
 <div class="modal-overlay" id="authOverlay" style="display:flex;">
   <div class="modal" style="max-width:380px;">
@@ -2177,6 +2222,60 @@
       await apiFetch('/api/admin/access', { method: 'DELETE' });
       refreshAdminAccessStatus();
     } catch (e) { alert('Sluiten mislukt: ' + e.message); }
+  });
+
+  // ---------- PWA-installatie ----------
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => { /* geen probleem, app werkt ook zonder */ });
+    });
+  }
+
+  const installBanner = $('installBanner');
+  const installBannerText = $('installBannerText');
+  const installBannerBtn = $('installBannerBtn');
+  const installBannerDismissBtn = $('installBannerDismissBtn');
+  let deferredInstallPrompt = null;
+
+  function isStandaloneDisplay(){
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  }
+  function isIOSDevice(){
+    return /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+  }
+  function installBannerDismissed(){
+    try { return localStorage.getItem('relay_install_dismissed') === 'true'; } catch (e) { return false; }
+  }
+  function dismissInstallBanner(){
+    installBanner.classList.remove('show');
+    try { localStorage.setItem('relay_install_dismissed', 'true'); } catch (e) { /* prima, gewoon niet onthouden */ }
+  }
+
+  installBannerDismissBtn.addEventListener('click', dismissInstallBanner);
+
+  if (!isStandaloneDisplay() && !installBannerDismissed()) {
+    if (isIOSDevice()) {
+      // Safari/iOS kent geen automatische installatie-prompt — alleen een
+      // handmatige route via het deel-icoon.
+      installBannerText.innerHTML = '<strong>Relay</strong> installeren: tik op <strong>Delen</strong> onderin Safari, en kies <strong>"Zet op beginscherm"</strong>.';
+      installBannerBtn.style.display = 'none';
+      installBanner.classList.add('show');
+    } else {
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredInstallPrompt = e;
+        installBanner.classList.add('show');
+      });
+    }
+  }
+
+  installBannerBtn.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) { dismissInstallBanner(); return; }
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    installBanner.classList.remove('show');
   });
 
   // init: check of er al een geldige sessie is
