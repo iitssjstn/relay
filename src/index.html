@@ -1207,6 +1207,17 @@
   let editingId = null;
   let sending = false;
   let userMemory = '';
+
+  // Vaste, niet-zichtbare instructie die altijd meegaat naar elke AI —
+  // los van het persoonlijke geheugen — zodat gegenereerde bestanden
+  // consequent en herkenbaar benoemd worden, en losse voorbeeldcommando's
+  // niet per ongeluk als "bestand" worden behandeld.
+  const FILE_FORMAT_INSTRUCTION = "Als je bestanden voor een project of script maakt: zet de volledige bestandsnaam (incl. pad, bv. src/app.py) als eigen regel direct vóór het codeblok, zonder sterretjes of andere opmaak eromheen. Gebruik codeblokken alleen voor bestanden die je daadwerkelijk voorstelt om aan te maken — niet voor losse voorbeeldcommando's, terminalinvoer of illustraties; die kun je gewoon als normale lopende tekst beschrijven.";
+
+  function buildSystemText(){
+    return [FILE_FORMAT_INSTRUCTION, userMemory].filter(Boolean).join('\n\n');
+  }
+
   let currentConvId = null;
   let convIndex = [];      // [{id, title, updatedAt}], newest first
   let pendingImages = [];  // dataURLs, klaar om met het volgende bericht mee te sturen
@@ -1855,6 +1866,34 @@
     if (currentArtifact) downloadTextFile(currentArtifact.filename, currentArtifact.content);
   });
 
+  // Als er geen bestandsnaam in de omringende tekst te vinden is, probeer
+  // er dan nog een uit de code zelf te halen — vaak nuttiger dan een kaal
+  // volgnummer. Kijkt naar een shebang/commentaarregel bovenaan (bv.
+  // "# deploy.sh"), of bij YAML naar een top-level "name:"-veld.
+  function guessNameFromContent(rawCode, lang, ext){
+    const lines = rawCode.split('\n').slice(0, 5);
+
+    // Commentaarregel met een letterlijke bestandsnaam erin, bv.
+    // "# config.yml" of "// src/app.js".
+    for (const line of lines) {
+      const m = /^\s*(?:#|\/\/|--|<!--)\s*([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})/.exec(line);
+      if (m) return m[1];
+    }
+
+    // YAML/Ansible: eerste "name:"-veld omzetten naar een leesbare bestandsnaam.
+    if (lang === 'yaml' || lang === 'yml') {
+      for (const line of lines) {
+        const m = /^\s*-?\s*name:\s*["']?([^"'\n]{3,50})["']?\s*$/i.exec(line);
+        if (m) {
+          const slug = m[1].toLowerCase().trim()
+            .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+          if (slug) return slug + '.' + ext;
+        }
+      }
+    }
+    return null;
+  }
+
   function enhanceCodeBlocks(containerEl){
     const chips = [];
     const filesInMessage = [];
@@ -1898,8 +1937,11 @@
 
       if (!filename) {
         const ext = CODE_EXT_MAP[lang] || lang || 'txt';
-        genericCounter++;
-        filename = ext === 'dockerfile' ? 'Dockerfile-' + genericCounter : ('bestand-' + genericCounter + '.' + ext);
+        filename = guessNameFromContent(rawCode, lang, ext);
+        if (!filename) {
+          genericCounter++;
+          filename = ext === 'dockerfile' ? 'Dockerfile-' + genericCounter : ('bestand-' + genericCounter + '.' + ext);
+        }
       }
 
       // Ongeacht hoe de naam tot stand kwam: zorg dat 'ie uniek is binnen
@@ -2547,7 +2589,7 @@
       messages: history.map(m => ({ role: m.role, content: anthropicMessageContent(m) })),
       stream: true
     };
-    if (userMemory && opts.injectMemory !== false) body.system = userMemory;
+    if (opts.injectMemory !== false) body.system = buildSystemText();
     const res = await proxyFetch('https://api.anthropic.com/v1/messages', {
       'Content-Type': 'application/json',
       'x-api-key': node.apiKey,
@@ -2581,7 +2623,7 @@
   async function callOpenAI(node, history, url, opts, onChunk){
     opts = opts || {};
     const messages = history.map(m => ({ role: m.role, content: openAIMessageContent(m) }));
-    if (userMemory && opts.injectMemory !== false) messages.unshift({ role: 'system', content: userMemory });
+    if (opts.injectMemory !== false) messages.unshift({ role: 'system', content: buildSystemText() });
     const res = await proxyFetch(url, {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ' + node.apiKey
@@ -2625,7 +2667,7 @@
       contents,
       generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
     };
-    if (userMemory && opts.injectMemory !== false) body.systemInstruction = { parts: [{ text: userMemory }] };
+    if (opts.injectMemory !== false) body.systemInstruction = { parts: [{ text: buildSystemText() }] };
     const res = await proxyFetch(url, { 'Content-Type': 'application/json' }, body);
     if (!res.ok) {
       const bodyText = await res.text();
