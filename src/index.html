@@ -510,7 +510,6 @@
     flex:1;
     min-height:0;
     overflow-y:auto;
-    overflow-x:hidden;
     padding: 22px 24px;
     display:flex; flex-direction:column; gap:16px;
   }
@@ -532,7 +531,6 @@
   .msg{
     display:flex; gap:11px;
     max-width: 760px;
-    min-width: 0;
   }
   .msg.user{ align-self:flex-end; flex-direction:row-reverse; }
   .msg.system{ align-self:center; max-width:640px; }
@@ -560,8 +558,6 @@
     white-space: pre-wrap;
     word-break: break-word;
     position: relative;
-    min-width: 0;
-    max-width: 100%;
   }
   .msg.user .bubble{ background: #1a1710; border-color: rgba(255,180,84,0.15); }
   .msg-meta{
@@ -1221,12 +1217,13 @@
   function buildSystemText(){
     const parts = [FILE_FORMAT_INSTRUCTION];
     if (userMemory) {
+      // Expliciet omkaderen als passieve achtergrondinfo, geen opdracht —
+      // anders gaat een model soms zelf actief verder met een eerder
+      // project zodra dit in het geheugen staat, ook bij een simpel "hoi".
       parts.push(
-        'Achtergrondinformatie over deze gebruiker uit eerdere gesprekken (uitsluitend ter ' +
-        'context, geen actieve opdracht). Ga hier NIET uit eigen beweging mee aan de slag — ' +
-        'wacht tot de gebruiker er zelf naar verwijst of een vraag stelt waar dit relevant voor is. ' +
-        'Een kort bericht als "hoi" of "hallo" is een gewone begroeting, geen verzoek om verder te ' +
-        'gaan met een eerder project hieronder:\n"""\n' + userMemory + '\n"""'
+        "Achtergrondinformatie over deze gebruiker, puur ter context (NIET per se relevant voor dit specifieke bericht, en zeker geen instructie om nu iets te doen):\n\"\"\"\n" +
+        userMemory +
+        "\n\"\"\"\nReageer altijd in de eerste plaats op wat de gebruiker in zijn huidige bericht daadwerkelijk schrijft of vraagt. Gebruik bovenstaande achtergrondinfo alleen als die aantoonbaar relevant is voor die specifieke vraag — begin nooit uit jezelf met een eerder project verder te werken, ook niet als de gebruiker alleen groet of iets korts zegt."
       );
     }
     return parts.join('\n\n');
@@ -1883,10 +1880,8 @@
   // Als er geen bestandsnaam in de omringende tekst te vinden is, probeer
   // er dan nog een uit de code zelf te halen — vaak nuttiger dan een kaal
   // volgnummer. Kijkt naar een shebang/commentaarregel bovenaan (bv.
-  // "# deploy.sh"), bij YAML naar een top-level "name:"-veld, en bij
-  // JS/TS/TSX/JSX naar een export-naam (met contextText als redmiddel
-  // wanneer die naam te generiek is, bv. "handler").
-  function guessNameFromContent(rawCode, lang, ext, contextText){
+  // "# deploy.sh"), of bij YAML naar een top-level "name:"-veld.
+  function guessNameFromContent(rawCode, lang, ext){
     const lines = rawCode.split('\n').slice(0, 5);
 
     // Commentaarregel met een letterlijke bestandsnaam erin, bv.
@@ -1907,52 +1902,6 @@
         }
       }
     }
-
-    // JS/TS/TSX/JSX: probeer de component- of functienaam te herleiden uit
-    // een export, en gok het bestandstype op basis van gebruikte syntax.
-    if (lang === 'js' || lang === 'jsx' || lang === 'ts' || lang === 'tsx') {
-      const code = rawCode;
-
-      // 'export default function Naam' of 'export default class Naam'
-      let m = /export\s+default\s+(?:function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(code);
-      // 'export default Naam;' (losse referentie onderaan het bestand)
-      if (!m) m = /export\s+default\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*;?\s*$/.exec(code.trim());
-      // 'export function Naam' / 'export const Naam ='
-      if (!m) m = /export\s+(?:function|const)\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(code);
-      // 'function Naam(' als laatste redmiddel
-      if (!m) m = /function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/.exec(code);
-
-      if (m) {
-        let name = m[1];
-
-        // Weinigzeggende generieke namen (elke Next.js/Express-route heet zo)
-        // -> probeer een betekenisvoller pad uit de omringende tekst te halen.
-        const GENERIC_FN_NAMES = new Set(['handler', 'default', 'index', 'main', 'App']);
-        if (GENERIC_FN_NAMES.has(name) && contextText) {
-          // Zoek naar een API-pad of bestandspad vlak vóór/na het codeblok,
-          // bv. "/api/deploy", "pages/api/deploy.js", "app/api/deploy/route.js".
-          const pathMatch =
-            /(?:^|[\s"'`(])(\/?(?:api|pages|app|src)\/[A-Za-z0-9_\-\/]+)/i.exec(contextText) ||
-            /`([A-Za-z0-9_\-]+)`\s+(?:endpoint|route|API)/i.exec(contextText) ||
-            /(?:endpoint|route)\s+`?([A-Za-z0-9_\-\/]+)`?/i.exec(contextText);
-
-          if (pathMatch) {
-            // Laatste segment van het pad gebruiken, opgeschoond.
-            const segment = pathMatch[1].split('/').filter(Boolean).pop();
-            if (segment) name = segment.replace(/\.(js|ts|tsx|jsx)$/i, '');
-          }
-        }
-
-        // PascalCase-namen zijn vrijwel altijd React-componenten -> .tsx/.jsx
-        const looksLikeComponent = /^[A-Z]/.test(name);
-        let resolvedExt = ext;
-        if (looksLikeComponent && (lang === 'ts' || lang === 'js')) {
-          resolvedExt = lang === 'ts' ? 'tsx' : 'jsx';
-        }
-        return name + '.' + resolvedExt;
-      }
-    }
-
     return null;
   }
 
@@ -1977,12 +1926,10 @@
       // het geval de naam een regeltje eerder staat (bv. als koptekst met
       // een lege regel of korte toelichting ertussen).
       let filename = null;
-      let contextText = '';
       let sib = preEl.previousElementSibling;
       for (let hops = 0; hops < 3 && sib && !filename; hops++) {
         const t = sib.textContent.trim();
         if (t.length > 0 && t.length < 80) {
-          contextText += (contextText ? ' ' : '') + t;
           const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
           if (m) filename = m[1];
         }
@@ -2001,7 +1948,7 @@
 
       if (!filename) {
         const ext = CODE_EXT_MAP[lang] || lang || 'txt';
-        filename = guessNameFromContent(rawCode, lang, ext, contextText);
+        filename = guessNameFromContent(rawCode, lang, ext);
         if (!filename) {
           genericCounter++;
           filename = ext === 'dockerfile' ? 'Dockerfile-' + genericCounter : ('bestand-' + genericCounter + '.' + ext);
@@ -2608,37 +2555,10 @@
     throw new Error('Onbekende provider');
   }
 
-  // Herkent of het tot nu toe gestreamde antwoord in een kapotte
-  // herhalingslus zit (bv. een model dat door een chat-template-fout
-  // hetzelfde fragment/token eindeloos blijft uitspugen, zoals letterlijke
-  // "begin_of_sentence"-tokens). Kijkt in het laatste stuk tekst of een kort
-  // fragment (2-60 tekens) minstens 8 keer aaneengesloten herhaald wordt.
-  // Voorkomt dat we tokens/credits verspillen aan een antwoord dat toch
-  // nooit bruikbaar wordt.
-  function detectRunawayRepetition(text){
-    if (text.length < 400) return false; // te vroeg om te oordelen
-    const tail = text.slice(-400);
-    for (let len = 2; len <= 60; len++) {
-      const chunk = tail.slice(tail.length - len);
-      if (!chunk.trim()) continue;
-      let repeats = 1;
-      let pos = tail.length - len;
-      while (pos - len >= 0 && tail.slice(pos - len, pos) === chunk) {
-        repeats++;
-        pos -= len;
-      }
-      if (repeats >= 8) return true;
-    }
-    return false;
-  }
-
   // Leest een Server-Sent-Events response regel voor regel en roept
   // onEvent aan met elk geparste JSON-object. Gedeeld door alle drie de
-  // providers hieronder, die elk hun eigen event-vorm hebben. Na elke
-  // netwerk-chunk wordt (indien meegegeven) shouldAbort() gecheckt — levert
-  // die true op, dan wordt de reader direct geannuleerd in plaats van de
-  // stream verder uit te lezen.
-  async function streamSSE(res, onEvent, shouldAbort){
+  // providers hieronder, die elk hun eigen event-vorm hebben.
+  async function streamSSE(res, onEvent){
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -2654,15 +2574,6 @@
         const data = trimmed.slice(5).trim();
         if (!data || data === '[DONE]') continue;
         try { onEvent(JSON.parse(data)); } catch (e) { /* onvolledig/kapot fragment overslaan */ }
-      }
-      if (shouldAbort && shouldAbort()) {
-        try { await reader.cancel(); } catch (e) { /* al gesloten, negeer */ }
-        const err = new Error(
-          'Dit model raakte vast in een herhalingslus (bleef hetzelfde fragment uitspugen) en is ' +
-          'automatisch afgebroken om geen tokens te verspillen.'
-        );
-        err.isRunawayRepetition = true;
-        throw err;
       }
     }
   }
@@ -2716,7 +2627,7 @@
       } else if (evt.type === 'error' && evt.error) {
         throw new Error(evt.error.message || 'Streamingfout');
       }
-    }, () => detectRunawayRepetition(full));
+    });
     return full.trim() || '(leeg antwoord)';
   }
 
@@ -2752,7 +2663,7 @@
         full += delta;
         if (onChunk) onChunk(full);
       }
-    }, () => detectRunawayRepetition(full));
+    });
     return full.trim() || '(leeg antwoord)';
   }
 
@@ -2787,7 +2698,7 @@
         full += deltaText;
         if (onChunk) onChunk(full);
       }
-    }, () => detectRunawayRepetition(full));
+    });
     return full.trim() || '(leeg antwoord)';
   }
 
