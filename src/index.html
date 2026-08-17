@@ -1829,15 +1829,22 @@
         while (j >= 0 && lines[j].trim() === '') j--;
         let filename = null;
         if (j >= 0) {
-          const t = lines[j].trim().replace(/[`*_]/g, '');
+          const t = lines[j].trim().replace(/[`*]/g, '');
           if (t.length < 80) {
-            const m = /([A-Za-z0-9_.\-]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
+            const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
             if (m) filename = m[1];
           }
         }
         let k = i + 1;
         const contentLines = [];
         while (k < lines.length && lines[k].trim() !== '```') { contentLines.push(lines[k]); k++; }
+
+        // Zelfde regel als bij enhanceCodeBlocks: geen herkende naam en
+        // maar een paar regels = waarschijnlijk een los voorbeeldcommando,
+        // geen echt projectbestand — niet meetellen.
+        const nonEmptyLines = contentLines.filter(l => l.trim() !== '').length;
+        if (!filename && nonEmptyLines <= 3) { i = k + 1; continue; }
+
         if (!filename) {
           const ext = CODE_EXT_MAP[lang] || lang || 'txt';
           filename = ext === 'dockerfile' ? 'Dockerfile' : ('bestand-' + (blocks.length + 1) + '.' + ext);
@@ -1884,10 +1891,18 @@
       if (prev) {
         const t = prev.textContent.trim();
         if (t.length < 80) {
-          const m = /([A-Za-z0-9_.\-]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
+          const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
           if (m) filename = m[1];
         }
       }
+
+      // Geen bestandsnaam gevonden én maar een paar regels? Dan is dit
+      // hoogstwaarschijnlijk gewoon een los voorbeeldcommando (bv. een
+      // ansible-playbook-aanroep), geen echt bestand — laat het dan als
+      // gewoon codeblok staan, zonder nep-bestandsnaam als "bestand.sh".
+      const lineCount = rawCode.split('\n').filter(l => l.trim() !== '').length;
+      if (!filename && lineCount <= 3) return;
+
       if (!filename) {
         const ext = CODE_EXT_MAP[lang] || lang || 'txt';
         filename = ext === 'dockerfile' ? 'Dockerfile' : ('bestand.' + ext);
