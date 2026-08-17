@@ -719,8 +719,13 @@
     padding: 9px 12px;
     border-bottom: 1px solid var(--border-soft);
     font-size: 12.5px;
+    transition: background .1s ease;
   }
-  .project-file-row:last-child{ border-bottom:none; }
+  .project-file-row:hover{ background: var(--panel-2); }
+  .project-file-item:last-child .project-file-row{ border-bottom:none; }
+  .project-file-item:has(.project-file-preview[style*="block"]) .project-file-row{
+    border-bottom: 1px solid var(--border-soft);
+  }
   .project-file-path{
     font-family: var(--font-mono); color: var(--text-dim);
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -728,6 +733,22 @@
   .project-file-size{
     font-family: var(--font-mono); font-size:10.5px; color: var(--text-faint);
     flex-shrink:0; margin-left:10px;
+  }
+  .project-file-chevron{
+    display:inline-block; color: var(--text-faint); font-size:10px;
+    transition: transform .15s ease; flex-shrink:0;
+  }
+  .project-file-chevron.open{ transform: rotate(90deg); }
+  .project-file-preview{
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .project-file-preview pre{
+    margin:0; padding:11px 13px; background: var(--bg);
+    max-height:260px; overflow:auto;
+  }
+  .project-file-preview code{
+    font-family: var(--font-mono); font-size:11.5px; line-height:1.5; color: var(--text-dim);
+    white-space:pre;
   }
   .project-empty{
     padding: 20px 12px; text-align:center; color: var(--text-faint); font-size:12.5px;
@@ -2180,23 +2201,52 @@
       listEl.innerHTML = '<div class="project-empty">Nog geen bestanden in dit gesprek gevonden.</div>';
     } else {
       listEl.innerHTML = files.map((f, i) => `
-        <div class="project-file-row">
-          <span class="project-file-path" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
-          <span style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
-            <span class="project-file-size">${formatFileSize(new Blob([f.content]).size)}</span>
-            <button type="button" class="code-file-btn" data-download-idx="${i}" title="Dit bestand los downloaden">↓</button>
-          </span>
+        <div class="project-file-item">
+          <div class="project-file-row" data-toggle-idx="${i}" style="cursor:pointer;">
+            <span style="display:flex; align-items:center; gap:7px; min-width:0;">
+              <span class="project-file-chevron" id="projChevron${i}">▸</span>
+              <span class="project-file-path" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
+            </span>
+            <span style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+              <span class="project-file-size">${formatFileSize(new Blob([f.content]).size)}</span>
+              <button type="button" class="code-file-btn" data-copy-idx="${i}" title="Inhoud kopiëren">kopieer</button>
+              <button type="button" class="code-file-btn" data-download-idx="${i}" title="Dit bestand los downloaden">↓</button>
+            </span>
+          </div>
+          <div class="project-file-preview" id="projPreview${i}" style="display:none;"><pre><code>${escapeHtml(f.content)}</code></pre></div>
         </div>
       `).join('');
+      listEl.querySelectorAll('[data-toggle-idx]').forEach(row => {
+        row.addEventListener('click', () => {
+          const i = row.dataset.toggleIdx;
+          const preview = $('projPreview' + i);
+          const chevron = $('projChevron' + i);
+          const open = preview.style.display !== 'none';
+          preview.style.display = open ? 'none' : 'block';
+          chevron.classList.toggle('open', !open);
+        });
+      });
       listEl.querySelectorAll('[data-download-idx]').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
           const f = files[Number(btn.dataset.downloadIdx)];
           downloadTextFile(f.path, f.content);
         });
       });
+      listEl.querySelectorAll('[data-copy-idx]').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const f = files[Number(btn.dataset.copyIdx)];
+          try {
+            await navigator.clipboard.writeText(f.content);
+            btn.textContent = 'gekopieerd';
+            setTimeout(() => { btn.textContent = 'kopieer'; }, 1400);
+          } catch (err) { /* stil negeren */ }
+        });
+      });
     }
     $('projectSub').textContent = files.length
-      ? files.length + ' bestand' + (files.length > 1 ? 'en' : '') + ' verzameld uit dit gesprek — nieuwere versies van hetzelfde bestand overschrijven oudere.'
+      ? files.length + ' bestand' + (files.length > 1 ? 'en' : '') + ' verzameld uit dit gesprek — klik op een bestand om de inhoud te bekijken.'
       : 'Nog geen bestanden die de AI in dit gesprek heeft gemaakt.';
 
     // Meteen checken of de ZIP-bibliotheek beschikbaar is, i.p.v. pas te
