@@ -693,6 +693,25 @@
     font-size:10px; line-height:16px; padding:0; cursor:pointer;
   }
 
+  .file-chip{
+    display:flex; align-items:center; gap:6px;
+    background: var(--panel-2); border:1px solid var(--border);
+    border-radius:8px; padding:6px 8px 6px 10px;
+    font-family: var(--font-mono); font-size:11.5px; color: var(--text-dim);
+    max-width:220px;
+  }
+  .file-chip-name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .file-chip-remove{
+    background:none; border:none; color: var(--text-faint);
+    font-size:11px; padding:2px 4px; border-radius:5px; flex-shrink:0;
+  }
+  .file-chip-remove:hover{ color: var(--text); background: var(--border-soft); }
+
+  .bubble-files{
+    display:flex; gap:6px; flex-wrap:wrap; margin-bottom: 8px;
+  }
+  .bubble-files .file-chip{ cursor:default; }
+
   .bubble-images{
     display:flex; gap:6px; flex-wrap:wrap; margin-bottom: 8px;
   }
@@ -861,10 +880,11 @@
       </div>
       <div style="border-top:1px solid var(--border-soft); padding-top:10px; width:100%;">
         <div id="authUserLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
-        <div style="display:flex; gap:6px; width:100%;">
-          <button class="ghost-btn" id="memoryBtn" style="flex:1; min-width:0;">Geheugen</button>
-          <button class="ghost-btn" id="adminBtn" style="display:none; flex:1; min-width:0;">Beheer</button>
-          <button class="ghost-btn" id="logoutBtn" style="flex:1; min-width:0;">Uitloggen</button>
+        <div style="display:flex; gap:6px; width:100%; flex-wrap:wrap;">
+          <button class="ghost-btn" id="memoryBtn" style="flex:1; min-width:80px;">Geheugen</button>
+          <button class="ghost-btn" id="githubTokenBtn" style="flex:1; min-width:80px;">GitHub</button>
+          <button class="ghost-btn" id="adminBtn" style="display:none; flex:1; min-width:80px;">Beheer</button>
+          <button class="ghost-btn" id="logoutBtn" style="flex:1; min-width:80px;">Uitloggen</button>
         </div>
       </div>
     </div>
@@ -896,6 +916,7 @@
       <div class="attach-menu" id="attachMenu">
         <button type="button" id="attachCameraBtn" class="attach-menu-item">📷 Foto maken</button>
         <button type="button" id="attachGalleryBtn" class="attach-menu-item">🖼️ Kies bestand</button>
+        <button type="button" id="attachGithubBtn" class="attach-menu-item">🐙 GitHub</button>
       </div>
       <div class="composer-box">
         <button class="attach-btn" id="attachImageBtn" title="Afbeelding toevoegen" disabled>+</button>
@@ -992,6 +1013,51 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="githubFileOverlay" style="display:none;">
+  <div class="modal" style="max-width:440px;">
+    <h2>GitHub toevoegen</h2>
+    <div class="modal-sub">Plak een link naar een <strong>los bestand</strong> (…/blob/…) of naar een <strong>hele repo</strong> (github.com/eigenaar/repo) — de inhoud wordt opgehaald en meegestuurd met je volgende bericht.</div>
+
+    <div class="field">
+      <label>GitHub-link</label>
+      <input id="githubFileUrlInput" type="text" placeholder="https://github.com/eigenaar/repo  of  .../blob/main/pad/bestand.js">
+      <div class="field-hint">Bij een hele repo worden de belangrijkste bestanden opgehaald (README, configbestanden, broncode) tot een redelijke grens — mappen als node_modules, .git en gebouwde bestanden worden overgeslagen. Voor privé-repo's heb je een GitHub-token nodig — zie "GitHub" onderaan de zijbalk.</div>
+    </div>
+
+    <div id="githubFileMsg" style="display:none; font-size:11.5px; margin-top:4px; margin-bottom:6px; line-height:1.4;"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="githubFileCancelBtn">Annuleren</button>
+      <button class="btn btn-primary" id="githubFileAddBtn">Toevoegen</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="githubTokenOverlay" style="display:none;">
+  <div class="modal" style="max-width:440px;">
+    <h2>GitHub</h2>
+    <div class="modal-sub">Optioneel: een Personal Access Token, alleen nodig om bestanden uit privé-repo's op te halen of om de (vrij lage) anonieme limiet van GitHub te omzeilen. Zonder token werkt het gewoon voor openbare repo's.</div>
+
+    <div id="githubTokenStatus" class="field-hint" style="margin-top:0; margin-bottom:12px;"></div>
+
+    <div class="field">
+      <label>Personal Access Token</label>
+      <div class="key-row">
+        <input id="githubTokenInput" type="password" placeholder="ghp_...">
+        <button type="button" id="githubTokenToggleBtn">toon</button>
+      </div>
+      <div class="field-hint">Aanmaken via GitHub → Settings → Developer settings → Personal access tokens. Voor privé-repo's is scope "repo" (of "Contents: Read-only" bij fine-grained tokens) genoeg.</div>
+    </div>
+
+    <div id="githubTokenMsg" style="display:none; font-size:11.5px; margin-top:4px; margin-bottom:6px; line-height:1.4;"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="githubTokenCloseBtn">Sluiten</button>
+      <button class="btn btn-primary" id="githubTokenSaveBtn">Opslaan</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="adminOverlay" style="display:none;">
   <div class="modal" style="max-width:440px;">
     <h2>Beheer toegang</h2>
@@ -1053,6 +1119,7 @@
   let currentConvId = null;
   let convIndex = [];      // [{id, title, updatedAt}], newest first
   let pendingImages = [];  // dataURLs, klaar om met het volgende bericht mee te sturen
+  let pendingFiles = [];   // {name, path, content}, klaar om mee te sturen (bv. GitHub-bestanden)
 
   const $ = (id) => document.getElementById(id);
   const nodeList = $('nodeList');
@@ -1136,22 +1203,40 @@
   }
 
   function renderImagePreviews(){
-    if (!pendingImages.length) {
+    if (!pendingImages.length && !pendingFiles.length) {
       imagePreviewStrip.style.display = 'none';
       imagePreviewStrip.innerHTML = '';
       updateComposerState();
       return;
     }
     imagePreviewStrip.style.display = 'flex';
-    imagePreviewStrip.innerHTML = pendingImages.map((src, i) => `
+    const imageChips = pendingImages.map((src, i) => `
       <div class="image-preview-item">
         <img src="${src}" alt="">
         <button class="image-preview-remove" data-idx="${i}" title="Verwijderen">✕</button>
       </div>
     `).join('');
+    const fileChips = pendingFiles.map((f, i) => {
+      const icon = f.kind === 'repo' ? '📦' : '📄';
+      const label = f.kind === 'repo' ? `${f.name} (${f.includedCount} bestanden)` : f.name;
+      const title = f.kind === 'repo' ? `${f.name}@${f.branch}` : (f.path || f.name);
+      return `
+      <div class="file-chip">
+        <span class="file-chip-name" title="${escapeHtml(title)}">${icon} ${escapeHtml(label)}</span>
+        <button class="file-chip-remove" data-fidx="${i}" title="Verwijderen">✕</button>
+      </div>
+    `;
+    }).join('');
+    imagePreviewStrip.innerHTML = imageChips + fileChips;
     imagePreviewStrip.querySelectorAll('.image-preview-remove').forEach(btn => {
       btn.addEventListener('click', () => {
         pendingImages.splice(Number(btn.dataset.idx), 1);
+        renderImagePreviews();
+      });
+    });
+    imagePreviewStrip.querySelectorAll('.file-chip-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        pendingFiles.splice(Number(btn.dataset.fidx), 1);
         renderImagePreviews();
       });
     });
@@ -1181,10 +1266,9 @@
   attachImageBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     // Op desktop negeren browsers het capture-attribuut toch (geen
-    // levende webcam-opname, gewoon dezelfde bestandskiezer) — een menu
-    // met een niet-werkende "camera"-optie is dan alleen verwarrend, dus
-    // daar openen we meteen de normale bestandskiezer.
-    if (!isMobileDevice()) { imageInput.click(); return; }
+    // levende webcam-opname, gewoon dezelfde bestandskiezer) — dus daar
+    // verbergen we alleen de "Foto maken"-optie, niet het hele menu.
+    $('attachCameraBtn').style.display = isMobileDevice() ? 'block' : 'none';
     if (attachMenu.classList.contains('show')) closeAttachMenu();
     else openAttachMenu();
   });
@@ -1196,6 +1280,7 @@
 
   $('attachCameraBtn').addEventListener('click', () => { closeAttachMenu(); cameraInput.click(); });
   $('attachGalleryBtn').addEventListener('click', () => { closeAttachMenu(); imageInput.click(); });
+  $('attachGithubBtn').addEventListener('click', () => { closeAttachMenu(); openGithubModal(); });
 
   imageInput.addEventListener('change', async () => {
     await handleSelectedFiles(imageInput.files);
@@ -1204,6 +1289,118 @@
   cameraInput.addEventListener('change', async () => {
     await handleSelectedFiles(cameraInput.files);
     cameraInput.value = '';
+  });
+
+  // ---------- GitHub-bestand toevoegen ----------
+
+  const githubFileOverlay = $('githubFileOverlay');
+  function openGithubModal(){
+    $('githubFileUrlInput').value = '';
+    $('githubFileMsg').style.display = 'none';
+    $('githubFileAddBtn').disabled = false;
+    $('githubFileAddBtn').textContent = 'Toevoegen';
+    githubFileOverlay.style.display = 'flex';
+    setTimeout(() => $('githubFileUrlInput').focus(), 30);
+  }
+  function closeGithubModal(){ githubFileOverlay.style.display = 'none'; }
+
+  $('githubFileCancelBtn').addEventListener('click', closeGithubModal);
+  githubFileOverlay.addEventListener('click', (e) => { if (e.target === githubFileOverlay) closeGithubModal(); });
+
+  $('githubFileAddBtn').addEventListener('click', async () => {
+    const url = $('githubFileUrlInput').value.trim();
+    const msgEl = $('githubFileMsg');
+    if (!url) { return; }
+    if (pendingFiles.length + pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+      msgEl.textContent = 'Maximaal ' + MAX_IMAGES_PER_MESSAGE + ' bijlagen per bericht.';
+      msgEl.style.color = 'var(--danger)'; msgEl.style.display = 'block';
+      return;
+    }
+    const btn = $('githubFileAddBtn');
+    btn.disabled = true; btn.textContent = 'Ophalen...';
+    msgEl.style.display = 'none';
+    try {
+      const data = await apiFetch('/api/github/fetch', { method: 'POST', body: { url } });
+      let noteText = null, noteColor = 'var(--amber)';
+      if (data.kind === 'repo') {
+        pendingFiles.push({
+          kind: 'repo',
+          name: data.owner + '/' + data.repo,
+          branch: data.branch,
+          files: data.files,
+          includedCount: data.includedCount,
+          totalFilesInRepo: data.totalFilesInRepo,
+          skippedCount: data.skippedCount
+        });
+        if (data.includedCount === 0) {
+          noteText = 'Geen bruikbare tekstbestanden gevonden in deze repo.';
+          noteColor = 'var(--danger)';
+        } else if (data.skippedCount > 0) {
+          noteText = data.includedCount + ' van de ' + data.totalFilesInRepo + ' bestanden toegevoegd (rest overgeslagen — te veel of te groot).';
+        }
+      } else {
+        pendingFiles.push({ kind: 'file', name: data.name, path: data.path, content: data.content });
+        if (data.truncated) noteText = 'Toegevoegd, maar ingekort (bestand was erg groot).';
+      }
+      renderImagePreviews();
+      if (noteText) {
+        msgEl.textContent = noteText;
+        msgEl.style.color = noteColor;
+        msgEl.style.display = 'block';
+        if (noteColor !== 'var(--danger)') setTimeout(closeGithubModal, 1800);
+      } else {
+        closeGithubModal();
+      }
+    } catch (e) {
+      msgEl.textContent = e.message;
+      msgEl.style.color = 'var(--danger)'; msgEl.style.display = 'block';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Toevoegen';
+    }
+  });
+  $('githubFileUrlInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('githubFileAddBtn').click(); }
+  });
+
+  // ---------- GitHub-token instellen ----------
+
+  const githubTokenOverlay = $('githubTokenOverlay');
+  async function openGithubTokenModal(){
+    $('githubTokenInput').value = '';
+    $('githubTokenInput').type = 'password';
+    $('githubTokenToggleBtn').textContent = 'toon';
+    $('githubTokenMsg').style.display = 'none';
+    githubTokenOverlay.style.display = 'flex';
+    try {
+      const data = await apiFetch('/api/github-token');
+      $('githubTokenStatus').textContent = data.hasToken
+        ? "Er is al een token ingesteld. Vul hieronder een nieuwe in om die te vervangen, of laat leeg en klik op Opslaan om 'm te verwijderen."
+        : "Nog geen token ingesteld — hoeft ook niet voor openbare repo's.";
+    } catch (e) { $('githubTokenStatus').textContent = 'Kon status niet ophalen.'; }
+  }
+  function closeGithubTokenModal(){ githubTokenOverlay.style.display = 'none'; }
+
+  $('githubTokenBtn').addEventListener('click', openGithubTokenModal);
+  $('githubTokenCloseBtn').addEventListener('click', closeGithubTokenModal);
+  githubTokenOverlay.addEventListener('click', (e) => { if (e.target === githubTokenOverlay) closeGithubTokenModal(); });
+  $('githubTokenToggleBtn').addEventListener('click', () => {
+    const f = $('githubTokenInput');
+    f.type = f.type === 'password' ? 'text' : 'password';
+    $('githubTokenToggleBtn').textContent = f.type === 'password' ? 'toon' : 'verberg';
+  });
+  $('githubTokenSaveBtn').addEventListener('click', async () => {
+    const token = $('githubTokenInput').value.trim();
+    const msgEl = $('githubTokenMsg');
+    try {
+      await apiFetch('/api/github-token', { method: 'PUT', body: { token } });
+      msgEl.textContent = token ? 'Token opgeslagen.' : 'Token verwijderd.';
+      msgEl.style.color = 'var(--relay-green)'; msgEl.style.display = 'block';
+      $('githubTokenInput').value = '';
+      $('githubTokenStatus').textContent = token ? 'Er staat een token ingesteld.' : 'Nog geen token ingesteld.';
+    } catch (e) {
+      msgEl.textContent = 'Opslaan mislukt: ' + e.message;
+      msgEl.style.color = 'var(--danger)'; msgEl.style.display = 'block';
+    }
   });
 
   let chainCollapsed = false;
@@ -1328,7 +1525,7 @@
       return;
     }
     conversation.forEach(m => {
-      if (m.role === 'user') addMessage('user', m.content, { images: m.images });
+      if (m.role === 'user') addMessage('user', m.content, { images: m.images, files: m.files });
       else addMessage('assistant', m.content, { providerName: m.providerName || 'AI' });
     });
   }
@@ -1370,9 +1567,14 @@
   function conversationTokenEstimate(){
     // Afbeeldingen kosten geen tekens maar wel echte tokens bij vision-
     // modellen; ~1500 tokens per afbeelding is een gangbare vuistregel.
+    // Bijgevoegde bestanden tellen gewoon mee als extra tekst.
     return conversation.reduce((sum, m) => {
       const imgTokens = (m.images && m.images.length) ? m.images.length * 1500 : 0;
-      return sum + estimateTokens(m.content) + imgTokens;
+      const fileChars = (m.files && m.files.length) ? m.files.reduce((s, f) => {
+        if (f.kind === 'repo') return s + (f.files || []).reduce((s2, rf) => s2 + (rf.content || '').length, 0);
+        return s + (f.content || '').length;
+      }, 0) : 0;
+      return sum + estimateTokens(m.content) + Math.ceil(fileChars / 4) + imgTokens;
     }, 200);
   }
 
@@ -1481,7 +1683,7 @@
     const wasDisabled = input.disabled;
     input.disabled = !ready;
     attachImageBtn.disabled = !ready;
-    sendBtn.disabled = !ready || (!input.value.trim() && !pendingImages.length);
+    sendBtn.disabled = !ready || (!input.value.trim() && !pendingImages.length && !pendingFiles.length);
     if (ready && wasDisabled) {
       // Het veld verloor de focus toen het disabled werd tijdens het
       // versturen — die krijgt de browser niet vanzelf terug, dus
@@ -1544,9 +1746,17 @@
       const imagesHtml = (opts.images && opts.images.length)
         ? `<div class="bubble-images">${opts.images.map(src => `<img src="${src}" alt="Bijgevoegde afbeelding" onclick="window.open(this.src, '_blank')">`).join('')}</div>`
         : '';
+      const filesHtml = (opts.files && opts.files.length)
+        ? `<div class="bubble-files">${opts.files.map(f => {
+            const icon = f.kind === 'repo' ? '📦' : '📄';
+            const label = f.kind === 'repo' ? `${f.name} (${f.includedCount} bestanden)` : f.name;
+            const title = f.kind === 'repo' ? `${f.name}@${f.branch}` : (f.path || f.name);
+            return `<span class="file-chip" title="${escapeHtml(title)}"><span class="file-chip-name">${icon} ${escapeHtml(label)}</span></span>`;
+          }).join('')}</div>`
+        : '';
       const bubbleHtml = role === 'assistant'
-        ? `<div class="bubble markdown">${imagesHtml}${renderMarkdownSafe(content)}</div>`
-        : `<div class="bubble">${imagesHtml}${escapeHtml(content)}</div>`;
+        ? `<div class="bubble markdown">${imagesHtml}${filesHtml}${renderMarkdownSafe(content)}</div>`
+        : `<div class="bubble">${imagesHtml}${filesHtml}${escapeHtml(content)}</div>`;
       wrap.innerHTML = `
         <div class="avatar">${avatarLabel}</div>
         <div>
@@ -1793,9 +2003,11 @@
 
   function trySend(){
     const text = input.value.trim();
-    if ((!text && !pendingImages.length) || sending || activeIndex === -1) return;
+    if ((!text && !pendingImages.length && !pendingFiles.length) || sending || activeIndex === -1) return;
     const images = pendingImages.slice();
+    const files = pendingFiles.slice();
     pendingImages = [];
+    pendingFiles = [];
     renderImagePreviews();
     input.value = '';
     input.style.height = 'auto';
@@ -1803,8 +2015,9 @@
     updateScrollBottomBtn();
     const msg = { role: 'user', content: text };
     if (images.length) msg.images = images;
+    if (files.length) msg.files = files;
     conversation.push(msg);
-    addMessage('user', text, { images });
+    addMessage('user', text, { images, files });
     updateComposerState();
     saveCurrentConversation();
     runTurn(text);
@@ -1912,10 +2125,31 @@
     return m ? { mediaType: m[1], base64: m[2] } : null;
   }
 
+  // Bijgevoegde bestanden (bv. van GitHub) tonen we in de gespreksbubbel
+  // alleen als naam-chip (niet de hele inhoud, dat zou de geschiedenis
+  // onleesbaar maken) — maar de AI moet de inhoud natuurlijk wél zien.
+  // Deze helper voegt de bestandsinhoud als code block toe vóór de eigen
+  // typte tekst, alleen op het moment dat een bericht naar een provider
+  // gaat.
+  function effectiveMessageText(m){
+    let text = m.content || '';
+    if (m.files && m.files.length) {
+      const blocks = m.files.map(f => {
+        if (f.kind === 'repo') {
+          return f.files.map(rf => '```' + f.name + '/' + rf.path + '\n' + rf.content + '\n```').join('\n\n');
+        }
+        return '```' + (f.path || f.name) + '\n' + f.content + '\n```';
+      }).join('\n\n');
+      text = blocks + (text ? '\n\n' + text : '');
+    }
+    return text;
+  }
+
   function anthropicMessageContent(m){
-    if (!m.images || !m.images.length) return m.content;
+    const text = effectiveMessageText(m);
+    if (!m.images || !m.images.length) return text;
     const blocks = [];
-    if (m.content) blocks.push({ type: 'text', text: m.content });
+    if (text) blocks.push({ type: 'text', text });
     m.images.forEach(dataUrl => {
       const parsed = splitDataUrl(dataUrl);
       if (parsed) blocks.push({ type: 'image', source: { type: 'base64', media_type: parsed.mediaType, data: parsed.base64 } });
@@ -1924,16 +2158,18 @@
   }
 
   function openAIMessageContent(m){
-    if (!m.images || !m.images.length) return m.content;
+    const text = effectiveMessageText(m);
+    if (!m.images || !m.images.length) return text;
     const blocks = [];
-    if (m.content) blocks.push({ type: 'text', text: m.content });
+    if (text) blocks.push({ type: 'text', text });
     m.images.forEach(dataUrl => blocks.push({ type: 'image_url', image_url: { url: dataUrl } }));
     return blocks;
   }
 
   function googleMessageParts(m){
+    const text = effectiveMessageText(m);
     const parts = [];
-    if (m.content) parts.push({ text: m.content });
+    if (text) parts.push({ text });
     (m.images || []).forEach(dataUrl => {
       const parsed = splitDataUrl(dataUrl);
       if (parsed) parts.push({ inline_data: { mime_type: parsed.mediaType, data: parsed.base64 } });

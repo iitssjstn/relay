@@ -1,16 +1,18 @@
 # Relay
 
-E�n chatgesprek, meerdere AI-modellen. Loopt de actieve AI tegen zijn
+Eén chatgesprek, meerdere AI-modellen. Loopt de actieve AI tegen zijn
 contextlimiet aan, dan neemt de volgende AI in de ketting het gesprek
 automatisch over — inclusief de volledige geschiedenis.
 
 Relay bestaat uit een simpele frontend (HTML/CSS/JS) en een kleine
-Node.js-server met een SQLite-database. De server regelt alleen
-**accounts en het bewaren van gesprekken/instellingen** — de AI-
-aanroepen zelf gaan nog steeds rechtstreeks vanuit je browser naar de
-provider die je zelf instelt (Anthropic, OpenAI, Google, etc.). Je
-API-keys komen dus nooit bij een derde partij terecht, maar staan wel
-(net als je gesprekken) in de database op je eigen server.
+Node.js-server met een SQLite-database. De server regelt accounts,
+het bewaren van gesprekken/instellingen, én stuurt de AI-aanroepen
+zelf door naar de provider die je instelt (Anthropic, OpenAI, Google,
+etc.) — dat laatste is een bewuste server-side proxy, nodig omdat
+sommige providers (zoals Groq) rechtstreekse browseraanroepen
+blokkeren (CORS). De server bewaart of leest de inhoud van die
+aanroepen niet, hij stuurt 'm alleen door. Je API-keys staan (net als
+je gesprekken) in de database op je eigen server.
 
 ## Accounts en toegang
 
@@ -149,8 +151,10 @@ docker compose down
 - Accounts, gesprekken en AI-instellingen (incl. API-keys) staan in
   een SQLite-database op je eigen server, gekoppeld aan het account
   waarmee je bent ingelogd — niet zichtbaar voor andere accounts.
-- AI-aanroepen zelf gaan rechtstreeks van jouw browser naar de
-  provider die je hebt ingesteld; die passeren de Relay-server niet.
+- AI-aanroepen lopen via de Relay-server naar de provider die je hebt
+  ingesteld (server-side proxy, nodig omdat sommige providers directe
+  browseraanroepen blokkeren). De server logt of bewaart de inhoud
+  daarvan niet — hij stuurt 'm alleen gestreamd door.
 - Wachtwoorden én de registratiecode worden gehasht opgeslagen
   (bcrypt), nooit in platte tekst.
 - Zorg dat de Proxy Host in NPM SSL afdwingt ("Force SSL"), zodat

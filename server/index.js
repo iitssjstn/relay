@@ -234,6 +234,197 @@ app.put('/api/memory', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- GitHub-integratie ----------
+//
+// Optioneel per account: een GitHub Personal Access Token, nodig voor
+// privé-repo's en om de (vrij lage) anonieme rate limit van GitHub te
+// omzeilen. De token wordt nooit teruggegeven aan de browser na het
+// opslaan — alleen of er wel/niet één is ingesteld.
+
+function parseGithubFileUrl(rawUrl){
+  let u;
+  try { u = new URL(rawUrl); } catch { return null; }
+  const parts = u.pathname.split('/').filter(Boolean);
+  if (u.hostname === 'github.com' && parts.length >= 5 && parts[2] === 'blob') {
+    return { owner: parts[0], repo: parts[1], branch: parts[3], path: parts.slice(4).join('/') };
+  }
+  if (u.hostname === 'raw.githubusercontent.com' && parts.length >= 4) {
+    return { owner: parts[0], repo: parts[1], branch: parts[2], path: parts.slice(3).join('/') };
+  }
+  return null;
+}
+
+function parseGithubRepoUrl(rawUrl){
+  let u;
+  try { u = new URL(rawUrl); } catch { return null; }
+  if (u.hostname !== 'github.com') return null;
+  const parts = u.pathname.split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  // Alleen echte repo-(sub)paden toestaan, geen /blob/-links (die zijn al
+  // eerder afgehandeld) en geen andere GitHub-secties zoals /settings etc.
+  if (parts[2] && !['tree', 'blob'].includes(parts[2])) return null;
+  const owner = parts[0], repo = parts[1];
+  const branch = (parts[2] === 'tree' && parts[3]) ? parts[3] : null;
+  return { owner, repo, branch };
+}
+
+async function ghApiFetch(url, token){
+  return fetch(url, {
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'User-Agent': 'Relay-App',
+      ...(token ? { Authorization: `token ${token}` } : {})
+    }
+  });
+}
+
+const GH_SKIP_DIR_PATTERN = /(^|\/)(node_modules|\.git|dist|build|vendor|coverage|__pycache__|\.next|\.venv|venv|target|out|bin|obj)(\/|$)/i;
+const GH_BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|svg|bmp|pdf|zip|tar|gz|7z|rar|mp3|mp4|mov|avi|woff2?|ttf|eot|otf|exe|dll|so|dylib|class|jar|wasm|lock|ttf)$/i;
+
+app.get('/api/github-token', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT github_token FROM users WHERE id = ?').get(req.user.uid);
+  res.json({ hasToken: !!(row && row.github_token) });
+});
+
+app.put('/api/github-token', requireAuth, (req, res) => {
+  const { token } = req.body || {};
+  db.prepare('UPDATE users SET github_token = ? WHERE id = ?').run(token || null, req.user.uid);
+  res.json({ ok: true });
+});
+
+app.post('/api/github/fetch', requireAuth, async (req, res) => {
+  const { url } = req.body || {};
+  const row = db.prepare('SELECT github_token FROM users WHERE id = ?').get(req.user.uid);
+  const token = row && row.github_token;
+
+  // Eerst proberen als link naar één specifiek bestand...
+  const fileParsed = parseGithubFileUrl(url || '');
+  if (fileParsed) {
+    return handleGithubFileFetch(fileParsed, token, res);
+  }
+
+  // ...anders proberen als link naar een hele repo.
+  const repoParsed = parseGithubRepoUrl(url || '');
+  if (repoParsed) {
+    return handleGithubRepoFetch(repoParsed, token, res);
+  }
+
+  res.status(400).json({ error: 'Kon geen geldige GitHub-link herkennen. Gebruik een link naar een bestand (…/blob/…) of naar een hele repo (github.com/eigenaar/repo).' });
+});
+
+async function handleGithubFileFetch(parsed, token, res){
+  const apiUrl = `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/contents/${parsed.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(parsed.branch)}`;
+  try {
+    const ghRes = await ghApiFetch(apiUrl, token);
+    if (!ghRes.ok) {
+      const errBody = await ghRes.json().catch(() => ({}));
+      const msg = ghRes.status === 404
+        ? 'Bestand niet gevonden (of privé zonder geldige token).'
+        : (errBody.message || ('GitHub gaf status ' + ghRes.status));
+      return res.status(ghRes.status).json({ error: msg });
+    }
+    const data = await ghRes.json();
+    if (Array.isArray(data)) {
+      return res.status(400).json({ error: 'Dit is een map, geen bestand. Geef een link naar een specifiek bestand, of naar de repo als geheel.' });
+    }
+    let content;
+    if (data.content && data.encoding === 'base64') {
+      content = Buffer.from(data.content, 'base64').toString('utf-8');
+    } else if (data.download_url) {
+      const rawRes = await fetch(data.download_url, { headers: { 'User-Agent': 'Relay-App' } });
+      content = await rawRes.text();
+    } else {
+      return res.status(400).json({ error: 'Kon de inhoud van dit bestand niet ophalen (mogelijk een binair bestand).' });
+    }
+    const MAX_CHARS = 60000;
+    let truncated = false;
+    if (content.length > MAX_CHARS) { content = content.slice(0, MAX_CHARS); truncated = true; }
+    res.json({ kind: 'file', name: data.name, path: data.path, content, truncated });
+  } catch (e) {
+    res.status(502).json({ error: 'Kon GitHub niet bereiken: ' + e.message });
+  }
+}
+
+async function handleGithubRepoFetch(parsed, token, res){
+  try {
+    let branch = parsed.branch;
+    if (!branch) {
+      const repoRes = await ghApiFetch(`https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`, token);
+      if (!repoRes.ok) {
+        const errBody = await repoRes.json().catch(() => ({}));
+        const msg = repoRes.status === 404
+          ? 'Repo niet gevonden (of privé zonder geldige token).'
+          : (errBody.message || ('GitHub gaf status ' + repoRes.status));
+        return res.status(repoRes.status).json({ error: msg });
+      }
+      branch = (await repoRes.json()).default_branch;
+    }
+
+    const treeRes = await ghApiFetch(`https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`, token);
+    if (!treeRes.ok) {
+      const errBody = await treeRes.json().catch(() => ({}));
+      return res.status(treeRes.status).json({ error: errBody.message || ('GitHub gaf status ' + treeRes.status) });
+    }
+    const treeData = await treeRes.json();
+    if (!treeData.tree) return res.status(400).json({ error: 'Kon de bestandsstructuur niet ophalen.' });
+
+    const allBlobs = treeData.tree.filter(item => item.type === 'blob');
+    let candidates = allBlobs.filter(item =>
+      !GH_SKIP_DIR_PATTERN.test(item.path) &&
+      !GH_BINARY_EXT.test(item.path) &&
+      (item.size == null || item.size < 100000)
+    );
+
+    // Belangrijke bestanden eerst (README, package.json, etc.), dan
+    // gewoon bestanden in de hoofdmap, dan de rest.
+    const priority = (p) => {
+      const lower = p.toLowerCase();
+      if (/^readme/.test(lower)) return 0;
+      if (/^(package\.json|requirements\.txt|go\.mod|cargo\.toml|pyproject\.toml)$/.test(lower)) return 1;
+      if (!lower.includes('/')) return 2;
+      return 3;
+    };
+    candidates = candidates.sort((a, b) => priority(a.path) - priority(b.path));
+
+    const MAX_FILES = 40;
+    const MAX_TOTAL_CHARS = 150000;
+    let totalChars = 0;
+    const files = [];
+    let skippedCount = 0;
+
+    for (const item of candidates) {
+      if (files.length >= MAX_FILES || totalChars >= MAX_TOTAL_CHARS) { skippedCount++; continue; }
+      try {
+        const blobRes = await ghApiFetch(`https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/git/blobs/${item.sha}`, token);
+        if (!blobRes.ok) { skippedCount++; continue; }
+        const blobData = await blobRes.json();
+        if (blobData.encoding !== 'base64') { skippedCount++; continue; }
+        let content;
+        try { content = Buffer.from(blobData.content, 'base64').toString('utf-8'); }
+        catch { skippedCount++; continue; }
+        if (content.includes('\u0000')) { skippedCount++; continue; } // ruwe binaire-detectie
+        if (totalChars + content.length > MAX_TOTAL_CHARS) {
+          content = content.slice(0, MAX_TOTAL_CHARS - totalChars);
+        }
+        totalChars += content.length;
+        files.push({ path: item.path, content });
+      } catch { skippedCount++; }
+    }
+
+    res.json({
+      kind: 'repo',
+      owner: parsed.owner, repo: parsed.repo, branch,
+      files,
+      totalFilesInRepo: allBlobs.length,
+      includedCount: files.length,
+      skippedCount,
+      totalChars
+    });
+  } catch (e) {
+    res.status(502).json({ error: 'Kon GitHub niet bereiken: ' + e.message });
+  }
+}
+
 // ---------- Admin: toegang & gebruikersbeheer ----------
 
 app.get('/api/admin/access', requireAuth, requireAdmin, (req, res) => {

@@ -47,5 +47,8 @@ const userColumns = db.prepare("PRAGMA table_info(users)").all().map(c => c.name
 if (!userColumns.includes('memory')) {
   db.exec("ALTER TABLE users ADD COLUMN memory TEXT NOT NULL DEFAULT ''");
 }
+if (!userColumns.includes('github_token')) {
+  db.exec("ALTER TABLE users ADD COLUMN github_token TEXT");
+}
 
 module.exports = db;
