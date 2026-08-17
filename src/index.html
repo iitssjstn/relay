@@ -549,7 +549,7 @@
   }
   .bubble.markdown pre{
     background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
-    padding: 11px 13px; overflow-x: auto; margin: 0 0 10px;
+    padding: 11px 13px; overflow-x: auto; margin: 0;
   }
   .bubble.markdown pre code{
     background: none; border: none; padding: 0; font-size: 12.5px; line-height:1.5;
@@ -557,6 +557,27 @@
   .bubble.markdown hr{ border: none; border-top: 1px solid var(--border-soft); margin: 12px 0; }
   .bubble.markdown table{ border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }
   .bubble.markdown th, .bubble.markdown td{ border: 1px solid var(--border-soft); padding: 5px 9px; text-align:left; }
+
+  .code-file-card{
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    margin: 0 0 10px; overflow: hidden;
+  }
+  .code-file-card pre{ border: none; border-radius: 0; margin: 0; }
+  .code-file-header{
+    display:flex; align-items:center; justify-content:space-between;
+    background: var(--panel); padding: 7px 11px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .code-file-name{
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .code-file-actions{ display:flex; gap:6px; flex-shrink:0; }
+  .code-file-btn{
+    background: var(--panel-2); border:1px solid var(--border); color: var(--text-faint);
+    font-size:10.5px; padding: 3px 8px; border-radius: 6px;
+  }
+  .code-file-btn:hover{ color: var(--text); border-color: var(--text-faint); }
 
   .msg-copy-btn{
     position: absolute; top: 6px; right: 6px;
@@ -1717,6 +1738,83 @@
     }
   }
 
+  const CODE_EXT_MAP = {
+    bash:'sh', sh:'sh', shell:'sh', zsh:'sh', console:'sh',
+    javascript:'js', js:'js', jsx:'jsx', typescript:'ts', ts:'ts', tsx:'tsx',
+    python:'py', py:'py', ruby:'rb', rb:'rb', php:'php', go:'go', golang:'go',
+    rust:'rs', rs:'rs', java:'java', kotlin:'kt', swift:'swift',
+    c:'c', cpp:'cpp', 'c++':'cpp', csharp:'cs', 'c#':'cs',
+    json:'json', yaml:'yml', yml:'yml', toml:'toml', ini:'ini',
+    html:'html', xml:'xml', css:'css', scss:'scss', less:'less',
+    sql:'sql', markdown:'md', md:'md', dockerfile:'dockerfile',
+    plaintext:'txt', text:'txt', txt:'txt'
+  };
+
+  // Na het renderen van markdown zoeken we losse code-blocks op en maken
+  // er een "bestandskaart" van met een herkenbare bestandsnaam, en een
+  // kopieer- én downloadknop — net als hoe Claude zelf code presenteert.
+  function enhanceCodeBlocks(containerEl){
+    containerEl.querySelectorAll('pre > code').forEach(codeEl => {
+      const preEl = codeEl.parentElement;
+      if (!preEl || preEl.dataset.enhanced) return;
+      preEl.dataset.enhanced = '1';
+
+      const langMatch = /language-(\S+)/.exec(codeEl.className || '');
+      const lang = langMatch ? langMatch[1].toLowerCase() : '';
+      const rawCode = codeEl.textContent || '';
+
+      // Probeer een bestandsnaam te herkennen in de tekst vlak vóór het
+      // code-block (bv. "deploy.sh :" of `deploy.sh` als eigen regel).
+      let filename = null;
+      const prev = preEl.previousElementSibling;
+      if (prev) {
+        const t = prev.textContent.trim();
+        if (t.length < 80) {
+          const m = /([A-Za-z0-9_.\-]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
+          if (m) filename = m[1];
+        }
+      }
+      if (!filename) {
+        const ext = CODE_EXT_MAP[lang] || lang || 'txt';
+        filename = ext === 'dockerfile' ? 'Dockerfile' : ('bestand.' + ext);
+      }
+
+      const card = document.createElement('div');
+      card.className = 'code-file-card';
+      const header = document.createElement('div');
+      header.className = 'code-file-header';
+      header.innerHTML = `
+        <span class="code-file-name">${escapeHtml(filename)}</span>
+        <span class="code-file-actions">
+          <button type="button" class="code-file-btn" data-act="copy">kopieer</button>
+          <button type="button" class="code-file-btn" data-act="download">↓ download</button>
+        </span>
+      `;
+      preEl.parentNode.insertBefore(card, preEl);
+      card.appendChild(header);
+      card.appendChild(preEl);
+
+      header.querySelector('[data-act="copy"]').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const btn = e.currentTarget;
+        try {
+          await navigator.clipboard.writeText(rawCode);
+          btn.textContent = 'gekopieerd';
+          setTimeout(() => { btn.textContent = 'kopieer'; }, 1400);
+        } catch (err) { /* stil negeren */ }
+      });
+      header.querySelector('[data-act="download"]').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const blob = new Blob([rawCode], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      });
+    });
+  }
+
   function addCopyButton(bubbleEl, rawText){
     const btn = document.createElement('button');
     btn.className = 'msg-copy-btn';
@@ -1765,6 +1863,7 @@
         </div>
       `;
       if (content) addCopyButton(wrap.querySelector('.bubble'), content);
+      if (role === 'assistant') enhanceCodeBlocks(wrap.querySelector('.bubble'));
     }
     messagesEl.appendChild(wrap);
     if (autoScrollToBottom) scrollMessagesToBottom();
@@ -1839,6 +1938,7 @@
         bubbleEl.classList.add('markdown');
         bubbleEl.innerHTML = renderMarkdownSafe(text || '(leeg antwoord)');
         addCopyButton(bubbleEl, text || '(leeg antwoord)');
+        enhanceCodeBlocks(bubbleEl);
       },
       remove(){ wrap.remove(); }
     };
