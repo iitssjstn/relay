@@ -646,13 +646,36 @@
   .composer-hint a{ color: var(--text-faint); text-decoration: underline; }
 
   .attach-btn{
-    background:none; border:none; color: var(--text-faint);
-    font-size:17px; padding:6px 7px; border-radius:8px;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
+    font-size:19px; font-weight:600; line-height:1;
+    width:32px; height:32px; border-radius:8px;
+    display:flex; align-items:center; justify-content:center;
     flex-shrink:0; align-self:flex-end; margin-bottom:2px;
-    transition: color .15s, background .15s;
+    transition: color .15s, background .15s, border-color .15s, transform .15s;
   }
-  .attach-btn:hover{ color: var(--text); background: var(--border-soft); }
+  .attach-btn:hover{ color: var(--text); border-color: var(--text-faint); }
   .attach-btn:disabled{ opacity:0.35; cursor:not-allowed; }
+  .attach-btn.open{ transform: rotate(45deg); }
+
+  .attach-menu{
+    display:none;
+    flex-direction:column;
+    gap:4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px;
+    margin-bottom:8px;
+    width: fit-content;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .attach-menu.show{ display:flex; }
+  .attach-menu-item{
+    background:none; border:none; color: var(--text-dim);
+    text-align:left; padding: 9px 12px; border-radius:7px;
+    font-size:13px; white-space:nowrap;
+  }
+  .attach-menu-item:hover{ background: var(--border-soft); color: var(--text); }
 
   .image-preview-strip{
     display:flex; gap:8px; flex-wrap:wrap;
@@ -870,9 +893,14 @@
 
     <div class="composer">
       <div class="image-preview-strip" id="imagePreviewStrip" style="display:none;"></div>
+      <div class="attach-menu" id="attachMenu">
+        <button type="button" id="attachCameraBtn" class="attach-menu-item">📷 Foto maken</button>
+        <button type="button" id="attachGalleryBtn" class="attach-menu-item">🖼️ Kies bestand</button>
+      </div>
       <div class="composer-box">
-        <button class="attach-btn" id="attachImageBtn" title="Afbeelding bijvoegen" disabled>📎</button>
+        <button class="attach-btn" id="attachImageBtn" title="Afbeelding toevoegen" disabled>+</button>
         <input type="file" id="imageInput" accept="image/*" multiple style="display:none">
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
         <textarea id="input" rows="1" placeholder="Typ je vraag..." disabled></textarea>
         <button class="send-btn" id="sendBtn" disabled>↑</button>
       </div>
@@ -1073,6 +1101,8 @@
   const chainToggleBtn = $('chainToggleBtn');
   const attachImageBtn = $('attachImageBtn');
   const imageInput = $('imageInput');
+  const cameraInput = $('cameraInput');
+  const attachMenu = $('attachMenu');
   const imagePreviewStrip = $('imagePreviewStrip');
 
   const MAX_IMAGES_PER_MESSAGE = 4;
@@ -1128,10 +1158,8 @@
     updateComposerState();
   }
 
-  attachImageBtn.addEventListener('click', () => imageInput.click());
-  imageInput.addEventListener('change', async () => {
-    const files = Array.from(imageInput.files || []).slice(0, MAX_IMAGES_PER_MESSAGE - pendingImages.length);
-    imageInput.value = '';
+  async function handleSelectedFiles(fileList){
+    const files = Array.from(fileList || []).slice(0, MAX_IMAGES_PER_MESSAGE - pendingImages.length);
     for (const file of files) {
       try {
         const dataUrl = await resizeImageFile(file);
@@ -1139,6 +1167,43 @@
       } catch (e) { console.error('Afbeelding overslaan:', e.message); }
     }
     renderImagePreviews();
+  }
+
+  function openAttachMenu(){
+    attachMenu.classList.add('show');
+    attachImageBtn.classList.add('open');
+  }
+  function closeAttachMenu(){
+    attachMenu.classList.remove('show');
+    attachImageBtn.classList.remove('open');
+  }
+
+  attachImageBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    // Op desktop negeren browsers het capture-attribuut toch (geen
+    // levende webcam-opname, gewoon dezelfde bestandskiezer) — een menu
+    // met een niet-werkende "camera"-optie is dan alleen verwarrend, dus
+    // daar openen we meteen de normale bestandskiezer.
+    if (!isMobileDevice()) { imageInput.click(); return; }
+    if (attachMenu.classList.contains('show')) closeAttachMenu();
+    else openAttachMenu();
+  });
+  document.addEventListener('click', (e) => {
+    if (attachMenu.classList.contains('show') && !attachMenu.contains(e.target) && e.target !== attachImageBtn) {
+      closeAttachMenu();
+    }
+  });
+
+  $('attachCameraBtn').addEventListener('click', () => { closeAttachMenu(); cameraInput.click(); });
+  $('attachGalleryBtn').addEventListener('click', () => { closeAttachMenu(); imageInput.click(); });
+
+  imageInput.addEventListener('change', async () => {
+    await handleSelectedFiles(imageInput.files);
+    imageInput.value = '';
+  });
+  cameraInput.addEventListener('change', async () => {
+    await handleSelectedFiles(cameraInput.files);
+    cameraInput.value = '';
   });
 
   let chainCollapsed = false;
