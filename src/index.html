@@ -65,8 +65,50 @@
     grid-template-columns: 300px 1fr;
     height: 100vh;
     max-height: 100vh;
+    transition: grid-template-columns .2s ease;
   }
   .app.hidden{ display:none; }
+  .app.artifact-open{ grid-template-columns: 300px 1fr 420px; }
+
+  .artifact-panel{
+    display:none;
+    flex-direction: column;
+    min-width:0; min-height:0;
+    background: var(--panel);
+    border-left: 1px solid var(--border-soft);
+  }
+  .app.artifact-open .artifact-panel{ display:flex; }
+  .artifact-panel-header{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:10px; padding: 12px 14px;
+    border-bottom: 1px solid var(--border-soft);
+    flex-shrink:0;
+  }
+  .artifact-panel-name{
+    font-family: var(--font-mono); font-size:12.5px; color: var(--text);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;
+  }
+  .artifact-panel-actions{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
+  .artifact-panel-close{
+    background:none; border:none; color: var(--text-faint);
+    font-size:13px; padding:4px 7px; border-radius:6px;
+  }
+  .artifact-panel-close:hover{ color: var(--text); background: var(--border-soft); }
+  .artifact-panel-body{
+    flex:1; min-height:0; overflow:auto;
+    margin:0; padding: 14px 16px;
+    background: var(--bg);
+  }
+  .artifact-panel-body code{
+    font-family: var(--font-mono); font-size:12.5px; line-height:1.6; color: var(--text-dim);
+    white-space:pre;
+  }
+
+  @media (max-width: 860px){
+    .artifact-panel{
+      position:fixed; inset:0; z-index:60;
+    }
+  }
 
 
   /* Mobiele topbalk (hamburger + naam) — alleen zichtbaar onder de breakpoint */
@@ -558,21 +600,22 @@
   .bubble.markdown table{ border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }
   .bubble.markdown th, .bubble.markdown td{ border: 1px solid var(--border-soft); padding: 5px 9px; text-align:left; }
 
-  .code-file-card{
-    border: 1px solid var(--border-soft); border-radius: 8px;
-    margin: 0 0 10px; overflow: hidden;
+  .code-file-chip{
+    display:inline-flex; align-items:center; gap:8px;
+    background: var(--panel-2); border:1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px;
+    margin: 0 0 10px; cursor:pointer; max-width:100%;
+    transition: border-color .15s ease, background .15s ease;
   }
-  .code-file-card pre{ border: none; border-radius: 0; margin: 0; }
-  .code-file-header{
-    display:flex; align-items:center; justify-content:space-between;
-    background: var(--panel); padding: 7px 11px;
-    border-bottom: 1px solid var(--border-soft);
-  }
-  .code-file-name{
-    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);
+  .code-file-chip:hover{ border-color: var(--text-faint); background: var(--border-soft); }
+  .code-file-chip-icon{ font-size:14px; flex-shrink:0; }
+  .code-file-chip-name{
+    font-family: var(--font-mono); font-size:12px; color: var(--text-dim);
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
-  .code-file-actions{ display:flex; gap:6px; flex-shrink:0; }
+  .code-file-chip-meta{
+    font-family: var(--font-mono); font-size:10px; color: var(--text-faint); flex-shrink:0;
+  }
   .code-file-btn{
     background: var(--panel-2); border:1px solid var(--border); color: var(--text-faint);
     font-size:10.5px; padding: 3px 8px; border-radius: 6px;
@@ -991,6 +1034,18 @@
       <div class="composer-hint">API-keys en gesprekken worden bewaard bij jouw account op deze Relay-server. Berichten lopen via de Relay-server naar de AI-provider die je zelf kiest (dat voorkomt browserblokkades bij sommige providers) — de server bewaart of leest de inhoud daarvan niet. Log volgende keer gewoon in om verder te gaan.</div>
     </div>
   </main>
+
+  <aside class="artifact-panel" id="artifactPanel">
+    <div class="artifact-panel-header">
+      <span class="artifact-panel-name" id="artifactPanelName"></span>
+      <div class="artifact-panel-actions">
+        <button type="button" class="code-file-btn" id="artifactPanelCopyBtn">kopieer</button>
+        <button type="button" class="code-file-btn" id="artifactPanelDownloadBtn">↓ download</button>
+        <button type="button" class="artifact-panel-close" id="artifactPanelCloseBtn" title="Sluiten">✕</button>
+      </div>
+    </div>
+    <pre class="artifact-panel-body"><code id="artifactPanelCode"></code></pre>
+  </aside>
 </div>
 
 <div class="modal-overlay" id="modalOverlay" style="display:none;">
@@ -1202,6 +1257,8 @@
   let convIndex = [];      // [{id, title, updatedAt}], newest first
   let pendingImages = [];  // dataURLs, klaar om met het volgende bericht mee te sturen
   let pendingFiles = [];   // {name, path, content}, klaar om mee te sturen (bv. GitHub-bestanden)
+  const artifactStore = new Map(); // artifactId -> {filename, content}, voor het zijpaneel
+  let artifactCounter = 0;
 
   const $ = (id) => document.getElementById(id);
   const nodeList = $('nodeList');
@@ -1573,6 +1630,7 @@
       renderNodes();
       renderConvList();
       closeMobileSidebar();
+      closeArtifactPanel();
       updateProjectButton();
       return true;
     } catch (e) { return false; }
@@ -1597,6 +1655,7 @@
     renderNodes();
     renderConvList();
     closeMobileSidebar();
+    closeArtifactPanel();
     updateProjectButton();
   }
 
@@ -1874,6 +1933,38 @@
   // Na het renderen van markdown zoeken we losse code-blocks op en maken
   // er een "bestandskaart" van met een herkenbare bestandsnaam, en een
   // kopieer- én downloadknop — net als hoe Claude zelf code presenteert.
+  // ---------- Zijpaneel voor code-bestanden (net als bij Claude zelf) ----------
+
+  const artifactPanel = $('artifactPanel');
+
+  function openArtifactPanel(id){
+    const data = artifactStore.get(id);
+    if (!data) return;
+    $('artifactPanelName').textContent = data.filename;
+    $('artifactPanelCode').textContent = data.content;
+    artifactPanel.dataset.currentId = id;
+    appRoot.classList.add('artifact-open');
+    if (isMobileDevice()) closeMobileSidebar();
+  }
+  function closeArtifactPanel(){
+    appRoot.classList.remove('artifact-open');
+  }
+  $('artifactPanelCloseBtn').addEventListener('click', closeArtifactPanel);
+  $('artifactPanelCopyBtn').addEventListener('click', async (e) => {
+    const data = artifactStore.get(artifactPanel.dataset.currentId);
+    if (!data) return;
+    const btn = e.currentTarget;
+    try {
+      await navigator.clipboard.writeText(data.content);
+      btn.textContent = 'gekopieerd';
+      setTimeout(() => { btn.textContent = 'kopieer'; }, 1400);
+    } catch (err) { /* stil negeren */ }
+  });
+  $('artifactPanelDownloadBtn').addEventListener('click', () => {
+    const data = artifactStore.get(artifactPanel.dataset.currentId);
+    if (data) downloadTextFile(data.filename, data.content);
+  });
+
   function enhanceCodeBlocks(containerEl){
     containerEl.querySelectorAll('pre > code').forEach(codeEl => {
       const preEl = codeEl.parentElement;
@@ -1909,38 +2000,17 @@
       }
 
       const card = document.createElement('div');
-      card.className = 'code-file-card';
-      const header = document.createElement('div');
-      header.className = 'code-file-header';
-      header.innerHTML = `
-        <span class="code-file-name">${escapeHtml(filename)}</span>
-        <span class="code-file-actions">
-          <button type="button" class="code-file-btn" data-act="copy">kopieer</button>
-          <button type="button" class="code-file-btn" data-act="download">↓ download</button>
-        </span>
+      card.className = 'code-file-chip';
+      card.innerHTML = `
+        <span class="code-file-chip-icon">📄</span>
+        <span class="code-file-chip-name">${escapeHtml(filename)}</span>
+        <span class="code-file-chip-meta">${lineCount} regel${lineCount === 1 ? '' : 's'}</span>
       `;
-      preEl.parentNode.insertBefore(card, preEl);
-      card.appendChild(header);
-      card.appendChild(preEl);
+      preEl.parentNode.replaceChild(card, preEl);
 
-      header.querySelector('[data-act="copy"]').addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const btn = e.currentTarget;
-        try {
-          await navigator.clipboard.writeText(rawCode);
-          btn.textContent = 'gekopieerd';
-          setTimeout(() => { btn.textContent = 'kopieer'; }, 1400);
-        } catch (err) { /* stil negeren */ }
-      });
-      header.querySelector('[data-act="download"]').addEventListener('click', (e) => {
-        e.stopPropagation();
-        const blob = new Blob([rawCode], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = filename;
-        document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url);
-      });
+      const artifactId = 'artifact-' + (artifactCounter++);
+      artifactStore.set(artifactId, { filename, content: rawCode });
+      card.addEventListener('click', () => openArtifactPanel(artifactId));
     });
   }
 
