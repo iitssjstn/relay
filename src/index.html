@@ -1627,9 +1627,13 @@
     return t.length > 42 ? t.slice(0, 42) + '…' : t;
   }
 
+  // Zodra de AI een betere titel heeft bedacht (na de eerste uitwisseling),
+  // staat die hier — en overschrijft dan de kale eerste-bericht-titel.
+  const aiGeneratedTitles = new Map(); // convId -> titel
+
   async function saveCurrentConversation(){
     if (!currentConvId || conversation.length === 0) return;
-    const title = titleFromConversation(conversation);
+    const title = aiGeneratedTitles.get(currentConvId) || titleFromConversation(conversation);
     try {
       const result = await apiFetch('/api/conversations/' + encodeURIComponent(currentConvId), {
         method: 'PUT', body: { title, messages: conversation }
@@ -1640,6 +1644,23 @@
       convIndex.sort((a, b) => b.updatedAt - a.updatedAt);
       renderConvList();
     } catch (e) { console.error('Gesprek opslaan mislukt:', e.message); }
+  }
+
+  // Laat de zojuist-actieve AI een korte, beschrijvende titel bedenken op
+  // basis van de eerste uitwisseling — alleen bij het allereerste
+  // berichtenpaar van een gesprek, net als bij Claude/ChatGPT zelf.
+  async function maybeGenerateConversationTitle(node, convId, userText, assistantText){
+    if (aiGeneratedTitles.has(convId)) return; // al gebeurd voor dit gesprek
+    try {
+      const prompt = 'Geef een korte, duidelijke titel (max 6 woorden) voor dit gesprek, gebaseerd op deze uitwisseling. Antwoord ALLEEN met de titel zelf — geen aanhalingstekens, geen opmaak, geen uitleg, geen punt aan het einde.\n\nGebruiker: ' + userText + '\nAI: ' + assistantText;
+      const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
+      let title = (raw || '').trim().replace(/^["'*]+|["'*]+$/g, '').replace(/\.$/, '').replace(/\s+/g, ' ').slice(0, 60);
+      if (!title) return;
+      aiGeneratedTitles.set(convId, title);
+      if (currentConvId === convId) await saveCurrentConversation();
+    } catch (e) {
+      // Stil falen — een titel bedenken is een bonus, geen kernfunctie.
+    }
   }
 
   async function loadConversationById(id){
@@ -2444,12 +2465,14 @@
         streamHandle.finish(replyText);
         node.status = 'done';
         node.coolDownUntil = null;
+        const wasFirstExchange = conversation.length === 1; // vóór het toevoegen van dit AI-antwoord
         conversation.push({ role: 'assistant', content: replyText, providerName: node.name });
         renderNodes();
         sending = false;
         updateComposerState();
         saveCurrentConversation();
         autoUpdateMemory(node, lastUserText, replyText);
+        if (wasFirstExchange) maybeGenerateConversationTitle(node, currentConvId, lastUserText, replyText);
         return;
       } catch (err) {
         streamHandle.remove();
