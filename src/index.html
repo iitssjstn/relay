@@ -1823,6 +1823,21 @@
     return d.innerHTML;
   }
 
+  // Tijdens het live typen tonen we platte tekst (goedkoop, geen echte
+  // markdown-parse per fragment — dat gaf eerder haperingen). Maar de
+  // rauwe markdown-tekens zelf (```, ####, ---) hoeven daar niet kaal bij
+  // te blijven staan: dit is een lichte, pure tekstvervanging (geen HTML-
+  // parsing, geen DOM-herbouw) en dus goedkoop genoeg om bij elk frame te
+  // draaien, in tegenstelling tot de volledige markdown-render.
+  function cleanStreamingText(text){
+    return text
+      .replace(/^```[a-zA-Z0-9_+-]*\s*$/gm, '')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/^-{3,}\s*$/gm, '')
+      .replace(/\*\*(.+?)\*\*/g, '$1')
+      .replace(/\n{3,}/g, '\n\n');
+  }
+
   function renderMarkdownSafe(text){
     try {
       const html = window.marked ? window.marked.parse(text, { breaks: true }) : escapeHtml(text);
@@ -2128,7 +2143,7 @@
     function flush(){
       frameScheduled = false;
       if (pendingText === null) return;
-      textEl.textContent = pendingText;
+      textEl.textContent = cleanStreamingText(pendingText);
       pendingText = null;
       if (autoScrollToBottom) scrollMessagesToBottom();
     }
