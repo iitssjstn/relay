@@ -1858,6 +1858,9 @@
   function enhanceCodeBlocks(containerEl){
     const chips = [];
     const filesInMessage = [];
+    const usedNames = new Set();
+    let genericCounter = 0;
+
     containerEl.querySelectorAll('pre > code').forEach(codeEl => {
       const preEl = codeEl.parentElement;
       if (!preEl || preEl.dataset.enhanced) return;
@@ -1868,15 +1871,22 @@
       const rawCode = codeEl.textContent || '';
 
       // Probeer een bestandsnaam te herkennen in de tekst vlak vóór het
-      // code-block (bv. "deploy.sh :" of `deploy.sh` als eigen regel).
+      // code-block. Niet alleen de regel er direct boven checken (bv.
+      // "deploy.sh :"), maar tot 3 voorafgaande regels terugkijken, voor
+      // het geval de naam een regeltje eerder staat (bv. als koptekst met
+      // een lege regel of korte toelichting ertussen).
       let filename = null;
-      const prev = preEl.previousElementSibling;
-      if (prev) {
-        const t = prev.textContent.trim();
-        if (t.length < 80) {
+      let sib = preEl.previousElementSibling;
+      for (let hops = 0; hops < 3 && sib && !filename; hops++) {
+        const t = sib.textContent.trim();
+        if (t.length > 0 && t.length < 80) {
           const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
           if (m) filename = m[1];
         }
+        // Stop bij een ander codeblok of een duidelijk langere alinea —
+        // dan zijn we voorbij de context van dít blok.
+        if (sib.tagName === 'PRE' || t.length >= 80) break;
+        sib = sib.previousElementSibling;
       }
 
       // Geen bestandsnaam gevonden én maar een paar regels? Dan is dit
@@ -1888,8 +1898,22 @@
 
       if (!filename) {
         const ext = CODE_EXT_MAP[lang] || lang || 'txt';
-        filename = ext === 'dockerfile' ? 'Dockerfile' : ('bestand.' + ext);
+        genericCounter++;
+        filename = ext === 'dockerfile' ? 'Dockerfile-' + genericCounter : ('bestand-' + genericCounter + '.' + ext);
       }
+
+      // Ongeacht hoe de naam tot stand kwam: zorg dat 'ie uniek is binnen
+      // dit bericht, zodat bestanden elkaar nooit overschrijven in de ZIP.
+      if (usedNames.has(filename)) {
+        const dotIdx = filename.lastIndexOf('.');
+        const base = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
+        const ext2 = dotIdx > 0 ? filename.slice(dotIdx) : '';
+        let n = 2;
+        let candidate = base + '-' + n + ext2;
+        while (usedNames.has(candidate)) { n++; candidate = base + '-' + n + ext2; }
+        filename = candidate;
+      }
+      usedNames.add(filename);
 
       const card = document.createElement('div');
       card.className = 'code-file-chip';
