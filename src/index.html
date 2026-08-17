@@ -605,6 +605,13 @@
     margin-top: 8px;
   }
   .code-file-chips-wrap .code-file-chip{ margin:0; }
+  .code-file-zip-btn{
+    border-style: dashed;
+    background: none;
+    font-family: var(--font-body);
+  }
+  .code-file-zip-btn:hover{ background: var(--border-soft); }
+  .code-file-zip-btn .code-file-chip-name{ color: var(--text-dim); white-space:normal; }
 
   .code-file-chip{
     display:inline-flex; align-items:center; gap:8px;
@@ -747,21 +754,6 @@
   }
   .attach-menu-item:hover{ background: var(--border-soft); color: var(--text); }
 
-  .project-files-bar{
-    display:flex; gap:8px; overflow-x:auto;
-    padding: 0 2px 10px;
-  }
-  .project-files-bar-chip{
-    display:flex; align-items:center; gap:6px; flex-shrink:0;
-    background: var(--panel-2); border:1px solid var(--border);
-    border-radius:8px; padding:6px 10px;
-    font-family: var(--font-mono); font-size:11.5px; color: var(--text-dim);
-    cursor:pointer; white-space:nowrap;
-    transition: border-color .15s ease, background .15s ease;
-  }
-  .project-files-bar-chip:hover{ border-color: var(--text-faint); background: var(--border-soft); }
-  .project-files-bar-chip.active{ border-color: var(--relay-green); color: var(--text); }
-
   .image-preview-strip{
     display:flex; gap:8px; flex-wrap:wrap;
     padding: 0 2px 10px;
@@ -776,46 +768,6 @@
     position:absolute; top:2px; right:2px; width:16px; height:16px;
     border-radius:50%; background:rgba(0,0,0,0.65); color:#fff; border:none;
     font-size:10px; line-height:16px; padding:0; cursor:pointer;
-  }
-
-  .project-file-row{
-    display:flex; align-items:center; justify-content:space-between;
-    padding: 9px 12px;
-    border-bottom: 1px solid var(--border-soft);
-    font-size: 12.5px;
-    transition: background .1s ease;
-  }
-  .project-file-row:hover{ background: var(--panel-2); }
-  .project-file-item:last-child .project-file-row{ border-bottom:none; }
-  .project-file-item:has(.project-file-preview[style*="block"]) .project-file-row{
-    border-bottom: 1px solid var(--border-soft);
-  }
-  .project-file-path{
-    font-family: var(--font-mono); color: var(--text-dim);
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  }
-  .project-file-size{
-    font-family: var(--font-mono); font-size:10.5px; color: var(--text-faint);
-    flex-shrink:0; margin-left:10px;
-  }
-  .project-file-chevron{
-    display:inline-block; color: var(--text-faint); font-size:10px;
-    transition: transform .15s ease; flex-shrink:0;
-  }
-  .project-file-chevron.open{ transform: rotate(90deg); }
-  .project-file-preview{
-    border-bottom: 1px solid var(--border-soft);
-  }
-  .project-file-preview pre{
-    margin:0; padding:11px 13px; background: var(--bg);
-    max-height:260px; overflow:auto;
-  }
-  .project-file-preview code{
-    font-family: var(--font-mono); font-size:11.5px; line-height:1.5; color: var(--text-dim);
-    white-space:pre;
-  }
-  .project-empty{
-    padding: 20px 12px; text-align:center; color: var(--text-faint); font-size:12.5px;
   }
 
   .file-chip{
@@ -1022,7 +974,6 @@
       <div style="display:flex; align-items:center; gap:10px;">
         <span class="active-badge none" id="activeBadge">geen AI actief</span>
         <div class="header-actions">
-          <button class="icon-btn" id="projectBtn" style="display:none;">📁 Project</button>
           <button class="icon-btn" id="clearBtn">Wis gesprek</button>
         </div>
       </div>
@@ -1039,7 +990,6 @@
     </div>
 
     <div class="composer">
-      <div class="project-files-bar" id="projectFilesBar" style="display:none;"></div>
       <div class="image-preview-strip" id="imagePreviewStrip" style="display:none;"></div>
       <div class="attach-menu" id="attachMenu">
         <button type="button" id="attachCameraBtn" class="attach-menu-item">📷 Foto maken</button>
@@ -1194,24 +1144,6 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" id="githubTokenCloseBtn">Sluiten</button>
       <button class="btn btn-primary" id="githubTokenSaveBtn">Opslaan</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-overlay" id="projectOverlay" style="display:none;">
-  <div class="modal" style="max-width:480px;">
-    <h2>Project</h2>
-    <div class="modal-sub" id="projectSub">Bestanden die de AI in dit gesprek heeft gemaakt of bijgewerkt, automatisch verzameld — inclusief updates uit latere berichten.</div>
-
-    <div class="field">
-      <div id="projectFileList" style="max-height:280px; overflow-y:auto; border:1px solid var(--border-soft); border-radius:8px;"></div>
-    </div>
-
-    <div id="projectMsg" style="display:none; font-size:11.5px; margin-top:2px; margin-bottom:10px; line-height:1.4;"></div>
-
-    <div class="modal-actions">
-      <button class="btn btn-secondary" id="projectCloseBtn">Sluiten</button>
-      <button class="btn btn-primary" id="projectDownloadZipBtn">Download als ZIP</button>
     </div>
   </div>
 </div>
@@ -1651,7 +1583,6 @@
       renderConvList();
       closeMobileSidebar();
       closeArtifactPanel();
-      updateProjectButton();
       return true;
     } catch (e) { return false; }
   }
@@ -1676,7 +1607,6 @@
     renderConvList();
     closeMobileSidebar();
     closeArtifactPanel();
-    updateProjectButton();
   }
 
   function renderFullConversation(){
@@ -1892,64 +1822,6 @@
     plaintext:'txt', text:'txt', txt:'txt'
   };
 
-  // Zoekt fenced code-blocks in de ruwe (opgeslagen) berichttekst — dus
-  // los van de gerenderde HTML — en herkent er een bestandsnaam bij op
-  // dezelfde manier als enhanceCodeBlocks dat visueel doet. Wordt gebruikt
-  // om over het hele gesprek heen een "project" van bestanden op te bouwen.
-  function extractFileBlocksFromText(text){
-    const lines = (text || '').split('\n');
-    const blocks = [];
-    let i = 0;
-    while (i < lines.length) {
-      const fenceMatch = /^```(\S*)\s*$/.exec(lines[i].trim());
-      if (fenceMatch) {
-        const lang = (fenceMatch[1] || '').toLowerCase();
-        let j = i - 1;
-        while (j >= 0 && lines[j].trim() === '') j--;
-        let filename = null;
-        if (j >= 0) {
-          const t = lines[j].trim().replace(/[`*]/g, '');
-          if (t.length < 80) {
-            const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
-            if (m) filename = m[1];
-          }
-        }
-        let k = i + 1;
-        const contentLines = [];
-        while (k < lines.length && lines[k].trim() !== '```') { contentLines.push(lines[k]); k++; }
-
-        // Zelfde regel als bij enhanceCodeBlocks: geen herkende naam en
-        // maar een paar regels = waarschijnlijk een los voorbeeldcommando,
-        // geen echt projectbestand — niet meetellen.
-        const nonEmptyLines = contentLines.filter(l => l.trim() !== '').length;
-        if (!filename && nonEmptyLines <= 3) { i = k + 1; continue; }
-
-        if (!filename) {
-          const ext = CODE_EXT_MAP[lang] || lang || 'txt';
-          filename = ext === 'dockerfile' ? 'Dockerfile' : ('bestand-' + (blocks.length + 1) + '.' + ext);
-        }
-        blocks.push({ path: filename, content: contentLines.join('\n') });
-        i = k + 1;
-      } else {
-        i++;
-      }
-    }
-    return blocks;
-  }
-
-  // Bouwt het "project" op uit alle AI-antwoorden in het huidige gesprek.
-  // Komt dezelfde bestandsnaam later nog een keer voor (de AI werkt een
-  // bestand bij), dan wint de nieuwste versie — zo groeit een idee over
-  // meerdere berichten heen uit tot een compleet project.
-  function extractProjectFiles(){
-    const fileMap = new Map();
-    conversation.forEach(m => {
-      if (m.role !== 'assistant') return;
-      extractFileBlocksFromText(m.content).forEach(b => fileMap.set(b.path, b.content));
-    });
-    return Array.from(fileMap.entries()).map(([path, content]) => ({ path, content }));
-  }
-
   // Na het renderen van markdown zoeken we losse code-blocks op en maken
   // er een "bestandskaart" van met een herkenbare bestandsnaam, en een
   // kopieer- én downloadknop — net als hoe Claude zelf code presenteert.
@@ -1964,12 +1836,10 @@
     $('artifactPanelCode').textContent = content;
     appRoot.classList.add('artifact-open');
     if (isMobileDevice()) closeMobileSidebar();
-    renderProjectFilesBar();
   }
   function closeArtifactPanel(){
     appRoot.classList.remove('artifact-open');
     currentArtifact = null;
-    renderProjectFilesBar();
   }
   $('artifactPanelCloseBtn').addEventListener('click', closeArtifactPanel);
   $('artifactPanelCopyBtn').addEventListener('click', async (e) => {
@@ -1985,32 +1855,9 @@
     if (currentArtifact) downloadTextFile(currentArtifact.filename, currentArtifact.content);
   });
 
-  // Vaste balk vlak boven het invoerveld met alle bestanden uit dit
-  // project — zo hoef je niet naar boven te scrollen om erbij te kunnen,
-  // ook niet bij een lang gesprek.
-  function renderProjectFilesBar(){
-    const bar = $('projectFilesBar');
-    const files = extractProjectFiles();
-    if (!files.length) {
-      bar.style.display = 'none';
-      bar.innerHTML = '';
-      return;
-    }
-    bar.style.display = 'flex';
-    bar.innerHTML = files.map(f => {
-      const active = currentArtifact && currentArtifact.filename === f.path && appRoot.classList.contains('artifact-open');
-      return `<span class="project-files-bar-chip${active ? ' active' : ''}" data-path="${escapeHtml(f.path)}">📄 ${escapeHtml(f.path)}</span>`;
-    }).join('');
-    bar.querySelectorAll('[data-path]').forEach(chip => {
-      chip.addEventListener('click', () => {
-        const f = files.find(x => x.path === chip.dataset.path);
-        if (f) showArtifact(f.path, f.content);
-      });
-    });
-  }
-
   function enhanceCodeBlocks(containerEl){
     const chips = [];
+    const filesInMessage = [];
     containerEl.querySelectorAll('pre > code').forEach(codeEl => {
       const preEl = codeEl.parentElement;
       if (!preEl || preEl.dataset.enhanced) return;
@@ -2057,12 +1904,46 @@
       // verzamelen om straks samen onderaan het bericht te tonen.
       preEl.remove();
       chips.push(card);
+      filesInMessage.push({ path: filename, content: rawCode });
     });
 
     if (chips.length) {
       const wrap = document.createElement('div');
       wrap.className = 'code-file-chips-wrap';
       chips.forEach(c => wrap.appendChild(c));
+
+      // Alleen als dit ene bericht meer dan 1 bestand opleverde, een
+      // ZIP-knop tonen — puur voor déze bestanden, niet het hele gesprek.
+      if (filesInMessage.length > 1) {
+        const zipBtn = document.createElement('button');
+        zipBtn.type = 'button';
+        zipBtn.className = 'code-file-chip code-file-zip-btn';
+        zipBtn.innerHTML = `<span class="code-file-chip-icon">🗜️</span><span class="code-file-chip-name">Alle ${filesInMessage.length} bestanden als ZIP</span>`;
+        zipBtn.addEventListener('click', async () => {
+          if (!window.JSZip) {
+            zipBtn.querySelector('.code-file-chip-name').textContent = 'ZIP-bibliotheek niet beschikbaar — download bestanden los';
+            return;
+          }
+          const original = zipBtn.querySelector('.code-file-chip-name').textContent;
+          zipBtn.querySelector('.code-file-chip-name').textContent = 'Bezig...';
+          try {
+            const zip = new window.JSZip();
+            filesInMessage.forEach(f => zip.file(f.path, f.content));
+            const blob = await zip.generateAsync({ type: 'blob' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'bestanden.zip';
+            document.body.appendChild(a); a.click(); a.remove();
+            URL.revokeObjectURL(url);
+          } catch (e) {
+            zipBtn.querySelector('.code-file-chip-name').textContent = 'ZIP maken mislukt';
+          } finally {
+            setTimeout(() => { zipBtn.querySelector('.code-file-chip-name').textContent = original; }, 1600);
+          }
+        });
+        wrap.appendChild(zipBtn);
+      }
+
       containerEl.appendChild(wrap);
     }
   }
@@ -2313,96 +2194,6 @@
     e.target.value = '';
   });
 
-  // ---------- Project (verzamelde bestanden uit het hele gesprek) ----------
-
-  const projectOverlay = $('projectOverlay');
-  const projectBtn = $('projectBtn');
-
-  function updateProjectButton(){
-    const files = extractProjectFiles();
-    projectBtn.style.display = files.length ? 'inline-flex' : 'none';
-    if (files.length) projectBtn.textContent = '📁 Project (' + files.length + ')';
-    renderProjectFilesBar();
-  }
-
-  function formatFileSize(bytes){
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  }
-
-  function openProjectModal(){
-    const files = extractProjectFiles();
-    const listEl = $('projectFileList');
-    const msgEl = $('projectMsg');
-    msgEl.style.display = 'none';
-    if (!files.length) {
-      listEl.innerHTML = '<div class="project-empty">Nog geen bestanden in dit gesprek gevonden.</div>';
-    } else {
-      listEl.innerHTML = files.map((f, i) => `
-        <div class="project-file-item">
-          <div class="project-file-row" data-toggle-idx="${i}" style="cursor:pointer;">
-            <span style="display:flex; align-items:center; gap:7px; min-width:0;">
-              <span class="project-file-chevron" id="projChevron${i}">▸</span>
-              <span class="project-file-path" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
-            </span>
-            <span style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
-              <span class="project-file-size">${formatFileSize(new Blob([f.content]).size)}</span>
-              <button type="button" class="code-file-btn" data-copy-idx="${i}" title="Inhoud kopiëren">kopieer</button>
-              <button type="button" class="code-file-btn" data-download-idx="${i}" title="Dit bestand los downloaden">↓</button>
-            </span>
-          </div>
-          <div class="project-file-preview" id="projPreview${i}" style="display:none;"><pre><code>${escapeHtml(f.content)}</code></pre></div>
-        </div>
-      `).join('');
-      listEl.querySelectorAll('[data-toggle-idx]').forEach(row => {
-        row.addEventListener('click', () => {
-          const i = row.dataset.toggleIdx;
-          const preview = $('projPreview' + i);
-          const chevron = $('projChevron' + i);
-          const open = preview.style.display !== 'none';
-          preview.style.display = open ? 'none' : 'block';
-          chevron.classList.toggle('open', !open);
-        });
-      });
-      listEl.querySelectorAll('[data-download-idx]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const f = files[Number(btn.dataset.downloadIdx)];
-          downloadTextFile(f.path, f.content);
-        });
-      });
-      listEl.querySelectorAll('[data-copy-idx]').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const f = files[Number(btn.dataset.copyIdx)];
-          try {
-            await navigator.clipboard.writeText(f.content);
-            btn.textContent = 'gekopieerd';
-            setTimeout(() => { btn.textContent = 'kopieer'; }, 1400);
-          } catch (err) { /* stil negeren */ }
-        });
-      });
-    }
-    $('projectSub').textContent = files.length
-      ? files.length + ' bestand' + (files.length > 1 ? 'en' : '') + ' verzameld uit dit gesprek — klik op een bestand om de inhoud te bekijken.'
-      : 'Nog geen bestanden die de AI in dit gesprek heeft gemaakt.';
-
-    // Meteen checken of de ZIP-bibliotheek beschikbaar is, i.p.v. pas te
-    // laten mislukken zodra iemand op de knop drukt.
-    const zipBtn = $('projectDownloadZipBtn');
-    if (!window.JSZip) {
-      zipBtn.disabled = true;
-      msgEl.textContent = 'De ZIP-bibliotheek kon niet laden (mogelijk geen internetverbinding of een adblocker die cdn.jsdelivr.net blokkeert). Download bestanden hieronder dan één voor één met het ↓-knopje.';
-      msgEl.style.color = 'var(--amber)';
-      msgEl.style.display = 'block';
-    } else {
-      zipBtn.disabled = !files.length;
-    }
-    projectOverlay.style.display = 'flex';
-  }
-  function closeProjectModal(){ projectOverlay.style.display = 'none'; }
-
   function downloadTextFile(filename, content){
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -2411,42 +2202,6 @@
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }
-
-  projectBtn.addEventListener('click', openProjectModal);
-  $('projectCloseBtn').addEventListener('click', closeProjectModal);
-  projectOverlay.addEventListener('click', (e) => { if (e.target === projectOverlay) closeProjectModal(); });
-
-  $('projectDownloadZipBtn').addEventListener('click', async () => {
-    const files = extractProjectFiles();
-    const msgEl = $('projectMsg');
-    if (!files.length) return;
-    if (!window.JSZip) {
-      msgEl.textContent = 'De ZIP-bibliotheek is niet beschikbaar. Download bestanden hieronder één voor één met het ↓-knopje.';
-      msgEl.style.color = 'var(--danger)';
-      msgEl.style.display = 'block';
-      return;
-    }
-    const btn = $('projectDownloadZipBtn');
-    btn.disabled = true; btn.textContent = 'Bezig...';
-    msgEl.style.display = 'none';
-    try {
-      const zip = new window.JSZip();
-      files.forEach(f => zip.file(f.path, f.content));
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const zipName = (titleFromConversation(conversation) || 'project').replace(/[^a-z0-9\-_. ]/gi, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'project';
-      a.href = url; a.download = zipName + '.zip';
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      msgEl.textContent = 'ZIP maken mislukt: ' + e.message + ' — download bestanden hieronder dan één voor één.';
-      msgEl.style.color = 'var(--danger)';
-      msgEl.style.display = 'block';
-    } finally {
-      btn.disabled = false; btn.textContent = 'Download als ZIP';
-    }
-  });
 
   $('clearBtn').addEventListener('click', () => {
     createNewConversation();
@@ -2553,7 +2308,6 @@
         sending = false;
         updateComposerState();
         saveCurrentConversation();
-        updateProjectButton();
         autoUpdateMemory(node, lastUserText, replyText);
         return;
       } catch (err) {
