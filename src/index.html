@@ -815,6 +815,7 @@
     flex:1; padding: 10px; border-radius:9px; border:none; font-weight:600; font-size:13px;
   }
   .btn-primary{ background: var(--amber); color:#1a1305; }
+  .btn:disabled{ opacity:0.4; cursor:not-allowed; }
   .btn-secondary{ background: var(--panel-2); color: var(--text-dim); border:1px solid var(--border); }
   .btn-danger-text{ background:none; color: var(--danger); border:none; font-size:12px; padding:8px; }
 
@@ -1107,6 +1108,8 @@
     <div class="field">
       <div id="projectFileList" style="max-height:280px; overflow-y:auto; border:1px solid var(--border-soft); border-radius:8px;"></div>
     </div>
+
+    <div id="projectMsg" style="display:none; font-size:11.5px; margin-top:2px; margin-bottom:10px; line-height:1.4;"></div>
 
     <div class="modal-actions">
       <button class="btn btn-secondary" id="projectCloseBtn">Sluiten</button>
@@ -2171,22 +2174,54 @@
   function openProjectModal(){
     const files = extractProjectFiles();
     const listEl = $('projectFileList');
+    const msgEl = $('projectMsg');
+    msgEl.style.display = 'none';
     if (!files.length) {
       listEl.innerHTML = '<div class="project-empty">Nog geen bestanden in dit gesprek gevonden.</div>';
     } else {
-      listEl.innerHTML = files.map(f => `
+      listEl.innerHTML = files.map((f, i) => `
         <div class="project-file-row">
           <span class="project-file-path" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
-          <span class="project-file-size">${formatFileSize(new Blob([f.content]).size)}</span>
+          <span style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+            <span class="project-file-size">${formatFileSize(new Blob([f.content]).size)}</span>
+            <button type="button" class="code-file-btn" data-download-idx="${i}" title="Dit bestand los downloaden">↓</button>
+          </span>
         </div>
       `).join('');
+      listEl.querySelectorAll('[data-download-idx]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const f = files[Number(btn.dataset.downloadIdx)];
+          downloadTextFile(f.path, f.content);
+        });
+      });
     }
     $('projectSub').textContent = files.length
       ? files.length + ' bestand' + (files.length > 1 ? 'en' : '') + ' verzameld uit dit gesprek — nieuwere versies van hetzelfde bestand overschrijven oudere.'
       : 'Nog geen bestanden die de AI in dit gesprek heeft gemaakt.';
+
+    // Meteen checken of de ZIP-bibliotheek beschikbaar is, i.p.v. pas te
+    // laten mislukken zodra iemand op de knop drukt.
+    const zipBtn = $('projectDownloadZipBtn');
+    if (!window.JSZip) {
+      zipBtn.disabled = true;
+      msgEl.textContent = 'De ZIP-bibliotheek kon niet laden (mogelijk geen internetverbinding of een adblocker die cdn.jsdelivr.net blokkeert). Download bestanden hieronder dan één voor één met het ↓-knopje.';
+      msgEl.style.color = 'var(--amber)';
+      msgEl.style.display = 'block';
+    } else {
+      zipBtn.disabled = !files.length;
+    }
     projectOverlay.style.display = 'flex';
   }
   function closeProjectModal(){ projectOverlay.style.display = 'none'; }
+
+  function downloadTextFile(filename, content){
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   projectBtn.addEventListener('click', openProjectModal);
   $('projectCloseBtn').addEventListener('click', closeProjectModal);
@@ -2194,9 +2229,17 @@
 
   $('projectDownloadZipBtn').addEventListener('click', async () => {
     const files = extractProjectFiles();
-    if (!files.length || !window.JSZip) return;
+    const msgEl = $('projectMsg');
+    if (!files.length) return;
+    if (!window.JSZip) {
+      msgEl.textContent = 'De ZIP-bibliotheek is niet beschikbaar. Download bestanden hieronder één voor één met het ↓-knopje.';
+      msgEl.style.color = 'var(--danger)';
+      msgEl.style.display = 'block';
+      return;
+    }
     const btn = $('projectDownloadZipBtn');
     btn.disabled = true; btn.textContent = 'Bezig...';
+    msgEl.style.display = 'none';
     try {
       const zip = new window.JSZip();
       files.forEach(f => zip.file(f.path, f.content));
@@ -2207,6 +2250,10 @@
       a.href = url; a.download = zipName + '.zip';
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
+    } catch (e) {
+      msgEl.textContent = 'ZIP maken mislukt: ' + e.message + ' — download bestanden hieronder dan één voor één.';
+      msgEl.style.color = 'var(--danger)';
+      msgEl.style.display = 'block';
     } finally {
       btn.disabled = false; btn.textContent = 'Download als ZIP';
     }
