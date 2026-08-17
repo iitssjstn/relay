@@ -508,9 +508,17 @@ app.post('/api/relay-proxy', requireAuth, async (req, res) => {
     });
 
     res.status(providerRes.status);
+    // Zonder deze header buffert nginx (bv. via NPM ervoor) dit soort
+    // doorlopend binnenkomende responses standaard, waardoor tekst in
+    // klonten aankomt in plaats van vloeiend te streamen. Dit zet dat
+    // uit, specifiek voor deze aanroep.
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Cache-Control', 'no-cache');
     for (const [key, value] of providerRes.headers.entries()) {
       if (RATE_LIMIT_HEADER_ALLOWLIST.includes(key.toLowerCase())) res.setHeader(key, value);
     }
+    res.flushHeaders();
+    if (res.socket) res.socket.setNoDelay(true); // Nagle's algoritme uit: kleine stukjes niet laten wachten
 
     if (!providerRes.body) { res.end(); return; }
     const reader = providerRes.body.getReader();
