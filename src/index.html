@@ -784,6 +784,35 @@
   }
   .file-chip-remove:hover{ color: var(--text); background: var(--border-soft); }
 
+  .memory-category-label{
+    font-family: var(--font-mono); text-transform:uppercase; font-size:10.5px;
+    letter-spacing:0.06em; color: var(--text-faint); margin: 14px 0 6px;
+  }
+  .memory-category-label:first-child{ margin-top:0; }
+  .memory-entry-item{
+    border: 1px solid var(--border-soft); border-radius:8px; margin-bottom:6px; overflow:hidden;
+  }
+  .memory-entry-row{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding: 9px 11px; cursor:pointer; transition: background .1s ease;
+  }
+  .memory-entry-row:hover{ background: var(--panel-2); }
+  .memory-entry-title-wrap{ display:flex; align-items:center; gap:7px; min-width:0; }
+  .memory-entry-chevron{ color: var(--text-faint); font-size:10px; transition: transform .15s ease; flex-shrink:0; }
+  .memory-entry-chevron.open{ transform: rotate(90deg); }
+  .memory-entry-title{ font-size:13px; color: var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .memory-entry-date{ font-family: var(--font-mono); font-size:10px; color: var(--text-faint); flex-shrink:0; }
+  .memory-entry-remove{
+    background:none; border:none; color: var(--text-faint); font-size:11px;
+    padding:2px 5px; border-radius:5px; flex-shrink:0;
+  }
+  .memory-entry-remove:hover{ color: var(--danger); background: var(--border-soft); }
+  .memory-entry-preview{
+    padding: 0 11px 11px; font-size:12.5px; color: var(--text-dim); line-height:1.5;
+    white-space:pre-wrap;
+  }
+  .memory-empty{ padding: 20px 12px; text-align:center; color: var(--text-faint); font-size:12.5px; }
+
   .bubble-files{
     display:flex; gap:6px; flex-wrap:wrap; margin-bottom: 8px;
   }
@@ -1085,20 +1114,24 @@
 </div>
 
 <div class="modal-overlay" id="memoryOverlay" style="display:none;">
-  <div class="modal" style="max-width:460px;">
+  <div class="modal" style="max-width:480px;">
     <h2>Geheugen</h2>
-    <div class="modal-sub">Relay leert dit automatisch bij tijdens je gesprekken — je hoeft hier niets zelf in te vullen. Na elk antwoord kijkt de AI even mee of er iets blijvends te onthouden viel, en werkt dit stil bij. Hier zie je wat er tot nu toe is opgeslagen, en kun je het zelf aanpassen of corrigeren.</div>
+    <div class="modal-sub">Relay leert dit automatisch bij tijdens je gesprekken, gegroepeerd per onderwerp — net als bij Claude zelf. Klik op een item om de inhoud te bekijken of te verwijderen, of vertel hieronder wat er moet veranderen.</div>
 
-    <div class="field">
-      <textarea id="memoryInput" rows="9" placeholder="Hier verschijnt vanzelf wat Relay over je leert naarmate je gesprekken voert." style="width:100%; resize:vertical; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:10px 11px; font-size:13.5px; line-height:1.5; outline:none;"></textarea>
-      <div class="field-hint"><span id="memoryCharCount">0</span> / 4000 tekens. Wordt bewaard bij je account, niet gedeeld met andere gebruikers. Elke keer bijwerken kost een extra, klein AI-verzoek na je bericht.</div>
+    <div id="memoryListWrap" style="max-height:320px; overflow-y:auto; margin-bottom:14px;"></div>
+
+    <div class="field" style="margin-bottom:8px;">
+      <div class="key-row">
+        <input id="memoryInstructionInput" type="text" placeholder="Bijv.: verwijder mijn gaming-notities, of: ik heet voortaan Justin V.">
+        <button type="button" id="memoryInstructionSendBtn" class="btn btn-primary" style="flex:none; padding:0 14px;">Stuur</button>
+      </div>
+      <div class="field-hint">Dit gaat naar je actieve AI, die de betreffende items voor je aanpast of verwijdert.</div>
     </div>
 
     <div id="memoryMsg" style="display:none; font-size:11.5px; margin-top:4px; margin-bottom:10px; line-height:1.4;"></div>
 
     <div class="modal-actions">
       <button class="btn btn-secondary" id="memoryCloseBtn">Sluiten</button>
-      <button class="btn btn-primary" id="memorySaveBtn">Opslaan</button>
     </div>
   </div>
 </div>
@@ -1206,7 +1239,9 @@
   let conversation = [];   // {role: 'user'|'assistant', content, images?: [dataUrl,...]}
   let editingId = null;
   let sending = false;
-  let userMemory = '';
+  let memoryEntries = [];  // {id, category, title, content, updatedAt} — gestructureerd geheugen, net als bij Claude zelf
+
+  const MEMORY_CATEGORY_LABELS = { profile: 'Profiel', topic: 'Topics', area: 'Areas' };
 
   // Vaste, niet-zichtbare instructie die altijd meegaat naar elke AI —
   // los van het persoonlijke geheugen — zodat gegenereerde bestanden
@@ -1216,14 +1251,28 @@
 
   function buildSystemText(){
     const parts = [FILE_FORMAT_INSTRUCTION];
-    if (userMemory) {
-      // Expliciet omkaderen als passieve achtergrondinfo, geen opdracht —
-      // anders gaat een model soms zelf actief verder met een eerder
-      // project zodra dit in het geheugen staat, ook bij een simpel "hoi".
+    if (memoryEntries.length) {
+      // Gegroepeerd per categorie tonen, net als bij Claude's eigen
+      // geheugenscherm — en expliciet omkaderen als passieve achtergrondinfo
+      // met concrete voorbeelden van wanneer NIET zelf te starten, want een
+      // losse waarschuwing bleek onvoldoende: modellen pakken gedetailleerde
+      // "user werkt aan X"-info toch als aanleiding om door te gaan, zelfs
+      // bij een kaal "hoi".
+      const grouped = { profile: [], topic: [], area: [] };
+      memoryEntries.forEach(e => { (grouped[e.category] || grouped.topic).push(e); });
+      let listing = '';
+      ['profile', 'topic', 'area'].forEach(cat => {
+        if (!grouped[cat].length) return;
+        listing += '## ' + MEMORY_CATEGORY_LABELS[cat] + '\n';
+        grouped[cat].forEach(e => { listing += '### ' + e.title + '\n' + e.content + '\n\n'; });
+      });
       parts.push(
-        "Achtergrondinformatie over deze gebruiker, puur ter context (NIET per se relevant voor dit specifieke bericht, en zeker geen instructie om nu iets te doen):\n\"\"\"\n" +
-        userMemory +
-        "\n\"\"\"\nReageer altijd in de eerste plaats op wat de gebruiker in zijn huidige bericht daadwerkelijk schrijft of vraagt. Gebruik bovenstaande achtergrondinfo alleen als die aantoonbaar relevant is voor die specifieke vraag — begin nooit uit jezelf met een eerder project verder te werken, ook niet als de gebruiker alleen groet of iets korts zegt."
+        "Achtergrondinformatie over deze gebruiker, PUUR ter context:\n\"\"\"\n" +
+        listing.trim() +
+        "\n\"\"\"\n" +
+        "Dit is GEEN opdracht en GEEN verzoek om ergens mee te beginnen. Belangrijke, harde regel: baseer wat je nu doet UITSLUITEND op wat de gebruiker in zijn huidige bericht daadwerkelijk schrijft.\n\n" +
+        "Is dat bericht kort, vaag, alleen een groet, of niet concreet (bijvoorbeeld: \"hoi\", \"hey\", \"test\", \"ben er weer\", of iets vergelijkbaars) — ga dan NOOIT uit jezelf verder met iets uit de achtergrondinfo hierboven, ook niet als dat logisch lijkt te volgen op eerder werk. Begin in dat geval geen code te schrijven, geen bestanden te maken en geen taak uit te voeren. Antwoord dan kort en vraag gewoon wat de gebruiker nu concreet wil.\n\n" +
+        "Gebruik de achtergrondinfo alleen als de gebruiker in zijn huidige bericht zelf al aangeeft dat het relevant is, of expliciet vraagt om verder te gaan met eerder werk."
       );
     }
     return parts.join('\n\n');
@@ -2843,7 +2892,7 @@
 
   $('logoutBtn').addEventListener('click', async () => {
     try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* ignore */ }
-    nodes = []; activeIndex = -1; conversation = []; convIndex = []; currentConvId = null; userMemory = '';
+    nodes = []; activeIndex = -1; conversation = []; convIndex = []; currentConvId = null; memoryEntries = [];
     showAuthScreen('login');
   });
 
@@ -2864,43 +2913,133 @@
   // ---------- Geheugen ----------
 
   const memoryOverlay = $('memoryOverlay');
-  const memoryInput = $('memoryInput');
-  const memoryCharCount = $('memoryCharCount');
+  const memoryListWrap = $('memoryListWrap');
 
   async function loadMemoryFromServer(){
     try {
-      const data = await apiFetch('/api/memory');
-      userMemory = data.memory || '';
-    } catch (e) { userMemory = ''; }
+      memoryEntries = await apiFetch('/api/memory-entries');
+    } catch (e) { memoryEntries = []; }
+  }
+
+  function formatMemoryDate(ts){
+    return new Date(ts).toLocaleDateString('nl-NL', { day: '2-digit', month: '2-digit' });
+  }
+
+  function renderMemoryList(){
+    if (!memoryEntries.length) {
+      memoryListWrap.innerHTML = '<div class="memory-empty">Nog niets onthouden. Zodra je een tijdje chat, verschijnen hier vanzelf items — of typ hieronder direct iets.</div>';
+      return;
+    }
+    const grouped = { profile: [], topic: [], area: [] };
+    memoryEntries.forEach(e => { (grouped[e.category] || grouped.topic).push(e); });
+
+    let html = '';
+    let rowIdx = 0;
+    const rowMeta = [];
+    ['profile', 'topic', 'area'].forEach(cat => {
+      if (!grouped[cat].length) return;
+      html += `<div class="memory-category-label">${MEMORY_CATEGORY_LABELS[cat]}</div>`;
+      grouped[cat].forEach(entry => {
+        const i = rowIdx++;
+        rowMeta.push(entry);
+        html += `
+          <div class="memory-entry-item">
+            <div class="memory-entry-row" data-toggle-idx="${i}">
+              <span class="memory-entry-title-wrap">
+                <span class="memory-entry-chevron" id="memChevron${i}">▸</span>
+                <span class="memory-entry-title">${escapeHtml(entry.title)}</span>
+              </span>
+              <span style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+                <span class="memory-entry-date">${formatMemoryDate(entry.updatedAt)}</span>
+                <button type="button" class="memory-entry-remove" data-remove-idx="${i}" title="Verwijderen">✕</button>
+              </span>
+            </div>
+            <div class="memory-entry-preview" id="memPreview${i}" style="display:none;"></div>
+          </div>
+        `;
+      });
+    });
+    memoryListWrap.innerHTML = html;
+
+    memoryListWrap.querySelectorAll('[data-toggle-idx]').forEach(row => {
+      row.addEventListener('click', () => {
+        const i = row.dataset.toggleIdx;
+        const preview = $('memPreview' + i);
+        const chevron = $('memChevron' + i);
+        const open = preview.style.display !== 'none';
+        if (!open) preview.textContent = rowMeta[i].content;
+        preview.style.display = open ? 'none' : 'block';
+        chevron.classList.toggle('open', !open);
+      });
+    });
+    memoryListWrap.querySelectorAll('[data-remove-idx]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const entry = rowMeta[Number(btn.dataset.removeIdx)];
+        if (!confirm('"' + entry.title + '" verwijderen uit je geheugen?')) return;
+        try {
+          await apiFetch('/api/memory-entries/' + entry.id, { method: 'DELETE' });
+          memoryEntries = memoryEntries.filter(m => m.id !== entry.id);
+          renderMemoryList();
+        } catch (err) { /* stil negeren */ }
+      });
+    });
   }
 
   // Laat de zojuist-actieve AI zelf even meekijken of er iets blijvends te
-  // onthouden viel aan deze uitwisseling, en werkt het geheugen dan stil
-  // op de achtergrond bij. Geen actie van de gebruiker nodig.
+  // onthouden viel aan deze uitwisseling, en werkt dan gericht één
+  // geheugen-item bij (of maakt een nieuwe aan) — net als bij Claude
+  // zelf, in plaats van steeds één hele lap tekst te herschrijven.
   let memoryUpdateInFlight = false;
   async function autoUpdateMemory(node, userText, assistantText){
     if (memoryUpdateInFlight || !userText || !assistantText) return;
     memoryUpdateInFlight = true;
     try {
+      const existingListing = memoryEntries.length
+        ? memoryEntries.map(e => '- [' + (MEMORY_CATEGORY_LABELS[e.category] || e.category) + '] ' + e.title + ': ' +
+            e.content.slice(0, 80).replace(/\n/g, ' ') + (e.content.length > 80 ? '…' : '')).join('\n')
+        : '(nog geen items)';
       const prompt =
-        'Huidig geheugen over deze gebruiker (leeg als er nog niets bekend is):\n"""\n' +
-        (userMemory || '(nog leeg)') + '\n"""\n\n' +
+        'Bestaande geheugen-items over deze gebruiker:\n' + existingListing + '\n\n' +
         'Nieuwe uitwisseling zojuist:\nGebruiker: ' + userText + '\nJij antwoordde: ' + assistantText + '\n\n' +
-        'Werk het geheugen bij: voeg alleen blijvende, in toekomstige gesprekken bruikbare feiten toe ' +
-        '(naam, voorkeuren, lopende projecten, technische context, gewenste communicatiestijl). ' +
-        'Laat tijdelijke of gespreksspecifieke details weg. Geef ALLEEN de volledige bijgewerkte ' +
-        'geheugentekst terug, in het Nederlands, maximaal 4000 tekens, zonder uitleg, zonder opmaak, ' +
-        'zonder aanhalingstekens eromheen. Is er niets blijvends nieuws, geef dan exact de huidige tekst terug.';
+        'Beoordeel of hier iets blijvends en herbruikbaars in zit voor toekomstige gesprekken (naam, voorkeuren, een lopend project, technische context, gewenste communicatiestijl) — geen tijdelijke of gespreksspecifieke details.\n\n' +
+        'Antwoord ALTIJD exact in dit formaat, niets eromheen:\n' +
+        'ACTIE: BIJWERKEN of NIEUW of GEEN\n' +
+        'CATEGORIE: profiel of topic of area\n' +
+        'TITEL: <korte titel, max 6 woorden>\n' +
+        'INHOUD:\n<de volledige, bijgewerkte inhoud van dit ene item, in het Nederlands>\n\n' +
+        'Gebruik BIJWERKEN als dit aanvult op een bestaand item (zelfde TITEL als hierboven in de lijst), NIEUW voor een nieuw onderwerp, of anders gewoon "ACTIE: GEEN" (en verder niets).';
+
       const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
-      const cleaned = (raw || '').trim().replace(/^"+|"+$/g, '');
-      if (cleaned && cleaned.length <= 4000 && cleaned !== userMemory) {
-        userMemory = cleaned;
-        await apiFetch('/api/memory', { method: 'PUT', body: { memory: userMemory } });
-        if (memoryOverlay.style.display === 'flex') {
-          memoryInput.value = userMemory;
-          memoryCharCount.textContent = String(userMemory.length);
-        }
+      const text = (raw || '').trim();
+
+      const actieMatch = /ACTIE:\s*(BIJWERKEN|NIEUW|GEEN)/i.exec(text);
+      const actie = actieMatch ? actieMatch[1].toUpperCase() : 'GEEN';
+      if (actie === 'GEEN') return;
+
+      const catMatch = /CATEGORIE:\s*(profiel|profile|topic|area)/i.exec(text);
+      let category = catMatch ? catMatch[1].toLowerCase() : 'topic';
+      if (category === 'profiel') category = 'profile';
+      if (!['profile', 'topic', 'area'].includes(category)) category = 'topic';
+
+      const titleMatch = /TITEL:\s*(.+)/i.exec(text);
+      const title = titleMatch ? titleMatch[1].trim().replace(/["*]/g, '').slice(0, 80) : null;
+      if (!title) return;
+
+      const contentMatch = /INHOUD:\s*([\s\S]*)/i.exec(text);
+      const content = contentMatch ? contentMatch[1].trim().slice(0, 3000) : '';
+      if (!content) return;
+
+      const existing = memoryEntries.find(e => e.category === category && e.title.toLowerCase() === title.toLowerCase());
+      if (existing) {
+        const updated = await apiFetch('/api/memory-entries/' + existing.id, { method: 'PUT', body: { category, title, content } });
+        const idx = memoryEntries.findIndex(e => e.id === existing.id);
+        if (idx !== -1) memoryEntries[idx] = updated;
+      } else {
+        const created = await apiFetch('/api/memory-entries', { method: 'POST', body: { category, title, content } });
+        memoryEntries.unshift(created);
       }
+      if (memoryOverlay.style.display === 'flex') renderMemoryList();
     } catch (e) {
       // Stil falen — geheugen bijwerken is een bonus, geen kernfunctie.
       console.error('Automatisch geheugen bijwerken mislukt:', e.message);
@@ -2910,34 +3049,90 @@
   }
 
   function openMemoryModal(){
-    memoryInput.value = userMemory;
-    memoryCharCount.textContent = String(userMemory.length);
     $('memoryMsg').style.display = 'none';
+    $('memoryInstructionInput').value = '';
+    renderMemoryList();
     memoryOverlay.style.display = 'flex';
-    setTimeout(() => memoryInput.focus(), 30);
   }
 
   $('memoryBtn').addEventListener('click', openMemoryModal);
   $('memoryCloseBtn').addEventListener('click', () => { memoryOverlay.style.display = 'none'; });
   memoryOverlay.addEventListener('click', (e) => { if (e.target === memoryOverlay) memoryOverlay.style.display = 'none'; });
-  memoryInput.addEventListener('input', () => {
-    memoryCharCount.textContent = String(memoryInput.value.length);
-  });
 
-  $('memorySaveBtn').addEventListener('click', async () => {
-    const text = memoryInput.value;
+  // Rechtstreeks tegen het geheugen "praten": de gebruiker typt een
+  // instructie (bv. "verwijder mijn gaming-notities"), de actieve AI
+  // interpreteert dat tegen de huidige items, en Relay past de items
+  // daarop aan (aanmaken/bijwerken/verwijderen) via dezelfde API's als
+  // de losse knopjes.
+  async function applyMemoryInstruction(instruction){
     const msgEl = $('memoryMsg');
-    try {
-      await apiFetch('/api/memory', { method: 'PUT', body: { memory: text } });
-      userMemory = text;
-      msgEl.textContent = 'Opgeslagen — gaat vanaf nu mee in elk gesprek.';
-      msgEl.style.color = 'var(--relay-green)';
-      msgEl.style.display = 'block';
-    } catch (e) {
-      msgEl.textContent = 'Opslaan mislukt: ' + e.message;
-      msgEl.style.color = 'var(--danger)';
-      msgEl.style.display = 'block';
+    const node = nodes[activeIndex];
+    if (!node) {
+      msgEl.textContent = 'Geen actieve AI om dit mee te verwerken — voeg er eerst één toe aan de ketting.';
+      msgEl.style.color = 'var(--danger)'; msgEl.style.display = 'block';
+      return;
     }
+    const btn = $('memoryInstructionSendBtn');
+    btn.disabled = true; btn.textContent = 'Bezig...';
+    msgEl.style.display = 'none';
+    try {
+      const currentJson = JSON.stringify(memoryEntries.map(e => ({ id: e.id, category: e.category, title: e.title, content: e.content })));
+      const prompt =
+        'Huidige geheugen-items van deze gebruiker (JSON-array):\n' + currentJson + '\n\n' +
+        'Instructie van de gebruiker: "' + instruction + '"\n\n' +
+        'Geef de VOLLEDIGE bijgewerkte lijst met items terug als geldige JSON-array, exact in dit formaat en niets eromheen (geen uitleg, geen markdown-opmaak):\n' +
+        '[{"id": <bestaand id of null bij een nieuw item>, "category": "profile"|"topic"|"area", "title": "...", "content": "..."}]\n\n' +
+        'Regels: wil de gebruiker iets verwijderen, laat dat item dan gewoon weg uit de teruggegeven lijst. Wil de gebruiker iets aanpassen, wijzig dan title/content maar behoud hetzelfde id. Nieuw item: id op null. Items die niet door de instructie geraakt worden, geef je ongewijzigd terug (zelfde id/category/title/content) — verzin niets nieuws bij wat je toch al teruggeeft.';
+
+      const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
+      let jsonText = (raw || '').trim()
+        .replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '').trim();
+      const start = jsonText.indexOf('[');
+      const end = jsonText.lastIndexOf(']');
+      if (start === -1 || end === -1) throw new Error('Kon geen geldige lijst herkennen in het antwoord.');
+      const parsed = JSON.parse(jsonText.slice(start, end + 1));
+      if (!Array.isArray(parsed)) throw new Error('Onverwacht antwoordformaat.');
+
+      const keptIds = new Set(parsed.filter(e => e.id).map(e => Number(e.id)));
+      const toDelete = memoryEntries.filter(e => !keptIds.has(e.id));
+      for (const e of toDelete) {
+        try { await apiFetch('/api/memory-entries/' + e.id, { method: 'DELETE' }); } catch (err) { /* negeren */ }
+      }
+
+      const nextEntries = [];
+      for (const e of parsed) {
+        const category = ['profile', 'topic', 'area'].includes(e.category) ? e.category : 'topic';
+        const title = (e.title || '').toString().trim().slice(0, 80);
+        const content = (e.content || '').toString().slice(0, 3000);
+        if (!title) continue;
+        const existingLocal = e.id ? memoryEntries.find(m => m.id === Number(e.id)) : null;
+        if (existingLocal) {
+          const updated = await apiFetch('/api/memory-entries/' + existingLocal.id, { method: 'PUT', body: { category, title, content } });
+          nextEntries.push(updated);
+        } else {
+          const created = await apiFetch('/api/memory-entries', { method: 'POST', body: { category, title, content } });
+          nextEntries.push(created);
+        }
+      }
+      memoryEntries = nextEntries;
+      renderMemoryList();
+      msgEl.textContent = 'Verwerkt.';
+      msgEl.style.color = 'var(--relay-green)'; msgEl.style.display = 'block';
+      $('memoryInstructionInput').value = '';
+    } catch (e) {
+      msgEl.textContent = 'Kon dit niet verwerken: ' + e.message;
+      msgEl.style.color = 'var(--danger)'; msgEl.style.display = 'block';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Stuur';
+    }
+  }
+
+  $('memoryInstructionSendBtn').addEventListener('click', () => {
+    const val = $('memoryInstructionInput').value.trim();
+    if (val) applyMemoryInstruction(val);
+  });
+  $('memoryInstructionInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('memoryInstructionSendBtn').click(); }
   });
 
   // ---------- Admin panel ----------
