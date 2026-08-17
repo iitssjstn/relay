@@ -714,6 +714,25 @@
     font-size:10px; line-height:16px; padding:0; cursor:pointer;
   }
 
+  .project-file-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: 12.5px;
+  }
+  .project-file-row:last-child{ border-bottom:none; }
+  .project-file-path{
+    font-family: var(--font-mono); color: var(--text-dim);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .project-file-size{
+    font-family: var(--font-mono); font-size:10.5px; color: var(--text-faint);
+    flex-shrink:0; margin-left:10px;
+  }
+  .project-empty{
+    padding: 20px 12px; text-align:center; color: var(--text-faint); font-size:12.5px;
+  }
+
   .file-chip{
     display:flex; align-items:center; gap:6px;
     background: var(--panel-2); border:1px solid var(--border);
@@ -917,6 +936,7 @@
       <div style="display:flex; align-items:center; gap:10px;">
         <span class="active-badge none" id="activeBadge">geen AI actief</span>
         <div class="header-actions">
+          <button class="icon-btn" id="projectBtn" style="display:none;">📁 Project</button>
           <button class="icon-btn" id="clearBtn">Wis gesprek</button>
         </div>
       </div>
@@ -1079,6 +1099,22 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="projectOverlay" style="display:none;">
+  <div class="modal" style="max-width:480px;">
+    <h2>Project</h2>
+    <div class="modal-sub" id="projectSub">Bestanden die de AI in dit gesprek heeft gemaakt of bijgewerkt, automatisch verzameld — inclusief updates uit latere berichten.</div>
+
+    <div class="field">
+      <div id="projectFileList" style="max-height:280px; overflow-y:auto; border:1px solid var(--border-soft); border-radius:8px;"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="projectCloseBtn">Sluiten</button>
+      <button class="btn btn-primary" id="projectDownloadZipBtn">Download als ZIP</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="adminOverlay" style="display:none;">
   <div class="modal" style="max-width:440px;">
     <h2>Beheer toegang</h2>
@@ -1117,6 +1153,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/marked@4.0.10/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.3/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script>
 (function(){
 
@@ -1512,6 +1549,7 @@
       renderNodes();
       renderConvList();
       closeMobileSidebar();
+      updateProjectButton();
       return true;
     } catch (e) { return false; }
   }
@@ -1535,6 +1573,7 @@
     renderNodes();
     renderConvList();
     closeMobileSidebar();
+    updateProjectButton();
   }
 
   function renderFullConversation(){
@@ -1749,6 +1788,57 @@
     sql:'sql', markdown:'md', md:'md', dockerfile:'dockerfile',
     plaintext:'txt', text:'txt', txt:'txt'
   };
+
+  // Zoekt fenced code-blocks in de ruwe (opgeslagen) berichttekst — dus
+  // los van de gerenderde HTML — en herkent er een bestandsnaam bij op
+  // dezelfde manier als enhanceCodeBlocks dat visueel doet. Wordt gebruikt
+  // om over het hele gesprek heen een "project" van bestanden op te bouwen.
+  function extractFileBlocksFromText(text){
+    const lines = (text || '').split('\n');
+    const blocks = [];
+    let i = 0;
+    while (i < lines.length) {
+      const fenceMatch = /^```(\S*)\s*$/.exec(lines[i].trim());
+      if (fenceMatch) {
+        const lang = (fenceMatch[1] || '').toLowerCase();
+        let j = i - 1;
+        while (j >= 0 && lines[j].trim() === '') j--;
+        let filename = null;
+        if (j >= 0) {
+          const t = lines[j].trim().replace(/[`*_]/g, '');
+          if (t.length < 80) {
+            const m = /([A-Za-z0-9_.\-]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
+            if (m) filename = m[1];
+          }
+        }
+        let k = i + 1;
+        const contentLines = [];
+        while (k < lines.length && lines[k].trim() !== '```') { contentLines.push(lines[k]); k++; }
+        if (!filename) {
+          const ext = CODE_EXT_MAP[lang] || lang || 'txt';
+          filename = ext === 'dockerfile' ? 'Dockerfile' : ('bestand-' + (blocks.length + 1) + '.' + ext);
+        }
+        blocks.push({ path: filename, content: contentLines.join('\n') });
+        i = k + 1;
+      } else {
+        i++;
+      }
+    }
+    return blocks;
+  }
+
+  // Bouwt het "project" op uit alle AI-antwoorden in het huidige gesprek.
+  // Komt dezelfde bestandsnaam later nog een keer voor (de AI werkt een
+  // bestand bij), dan wint de nieuwste versie — zo groeit een idee over
+  // meerdere berichten heen uit tot een compleet project.
+  function extractProjectFiles(){
+    const fileMap = new Map();
+    conversation.forEach(m => {
+      if (m.role !== 'assistant') return;
+      extractFileBlocksFromText(m.content).forEach(b => fileMap.set(b.path, b.content));
+    });
+    return Array.from(fileMap.entries()).map(([path, content]) => ({ path, content }));
+  }
 
   // Na het renderen van markdown zoeken we losse code-blocks op en maken
   // er een "bestandskaart" van met een herkenbare bestandsnaam, en een
@@ -2061,6 +2151,67 @@
     e.target.value = '';
   });
 
+  // ---------- Project (verzamelde bestanden uit het hele gesprek) ----------
+
+  const projectOverlay = $('projectOverlay');
+  const projectBtn = $('projectBtn');
+
+  function updateProjectButton(){
+    const files = extractProjectFiles();
+    projectBtn.style.display = files.length ? 'inline-flex' : 'none';
+    if (files.length) projectBtn.textContent = '📁 Project (' + files.length + ')';
+  }
+
+  function formatFileSize(bytes){
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function openProjectModal(){
+    const files = extractProjectFiles();
+    const listEl = $('projectFileList');
+    if (!files.length) {
+      listEl.innerHTML = '<div class="project-empty">Nog geen bestanden in dit gesprek gevonden.</div>';
+    } else {
+      listEl.innerHTML = files.map(f => `
+        <div class="project-file-row">
+          <span class="project-file-path" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
+          <span class="project-file-size">${formatFileSize(new Blob([f.content]).size)}</span>
+        </div>
+      `).join('');
+    }
+    $('projectSub').textContent = files.length
+      ? files.length + ' bestand' + (files.length > 1 ? 'en' : '') + ' verzameld uit dit gesprek — nieuwere versies van hetzelfde bestand overschrijven oudere.'
+      : 'Nog geen bestanden die de AI in dit gesprek heeft gemaakt.';
+    projectOverlay.style.display = 'flex';
+  }
+  function closeProjectModal(){ projectOverlay.style.display = 'none'; }
+
+  projectBtn.addEventListener('click', openProjectModal);
+  $('projectCloseBtn').addEventListener('click', closeProjectModal);
+  projectOverlay.addEventListener('click', (e) => { if (e.target === projectOverlay) closeProjectModal(); });
+
+  $('projectDownloadZipBtn').addEventListener('click', async () => {
+    const files = extractProjectFiles();
+    if (!files.length || !window.JSZip) return;
+    const btn = $('projectDownloadZipBtn');
+    btn.disabled = true; btn.textContent = 'Bezig...';
+    try {
+      const zip = new window.JSZip();
+      files.forEach(f => zip.file(f.path, f.content));
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const zipName = (titleFromConversation(conversation) || 'project').replace(/[^a-z0-9\-_. ]/gi, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'project';
+      a.href = url; a.download = zipName + '.zip';
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Download als ZIP';
+    }
+  });
+
   $('clearBtn').addEventListener('click', () => {
     createNewConversation();
   });
@@ -2166,6 +2317,7 @@
         sending = false;
         updateComposerState();
         saveCurrentConversation();
+        updateProjectButton();
         autoUpdateMemory(node, lastUserText, replyText);
         return;
       } catch (err) {
