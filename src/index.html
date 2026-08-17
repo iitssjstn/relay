@@ -68,7 +68,7 @@
     transition: grid-template-columns .2s ease;
   }
   .app.hidden{ display:none; }
-  .app.artifact-open{ grid-template-columns: 300px 1fr 420px; }
+  .app.artifact-open{ grid-template-columns: 300px 1fr 1fr; }
 
   .artifact-panel{
     display:none;
@@ -600,6 +600,12 @@
   .bubble.markdown table{ border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }
   .bubble.markdown th, .bubble.markdown td{ border: 1px solid var(--border-soft); padding: 5px 9px; text-align:left; }
 
+  .code-file-chips-wrap{
+    display:flex; flex-direction:column; gap:6px;
+    margin-top: 8px;
+  }
+  .code-file-chips-wrap .code-file-chip{ margin:0; }
+
   .code-file-chip{
     display:inline-flex; align-items:center; gap:8px;
     background: var(--panel-2); border:1px solid var(--border);
@@ -740,6 +746,21 @@
     font-size:13px; white-space:nowrap;
   }
   .attach-menu-item:hover{ background: var(--border-soft); color: var(--text); }
+
+  .project-files-bar{
+    display:flex; gap:8px; overflow-x:auto;
+    padding: 0 2px 10px;
+  }
+  .project-files-bar-chip{
+    display:flex; align-items:center; gap:6px; flex-shrink:0;
+    background: var(--panel-2); border:1px solid var(--border);
+    border-radius:8px; padding:6px 10px;
+    font-family: var(--font-mono); font-size:11.5px; color: var(--text-dim);
+    cursor:pointer; white-space:nowrap;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .project-files-bar-chip:hover{ border-color: var(--text-faint); background: var(--border-soft); }
+  .project-files-bar-chip.active{ border-color: var(--relay-green); color: var(--text); }
 
   .image-preview-strip{
     display:flex; gap:8px; flex-wrap:wrap;
@@ -1018,6 +1039,7 @@
     </div>
 
     <div class="composer">
+      <div class="project-files-bar" id="projectFilesBar" style="display:none;"></div>
       <div class="image-preview-strip" id="imagePreviewStrip" style="display:none;"></div>
       <div class="attach-menu" id="attachMenu">
         <button type="button" id="attachCameraBtn" class="attach-menu-item">📷 Foto maken</button>
@@ -1257,8 +1279,6 @@
   let convIndex = [];      // [{id, title, updatedAt}], newest first
   let pendingImages = [];  // dataURLs, klaar om met het volgende bericht mee te sturen
   let pendingFiles = [];   // {name, path, content}, klaar om mee te sturen (bv. GitHub-bestanden)
-  const artifactStore = new Map(); // artifactId -> {filename, content}, voor het zijpaneel
-  let artifactCounter = 0;
 
   const $ = (id) => document.getElementById(id);
   const nodeList = $('nodeList');
@@ -1936,36 +1956,61 @@
   // ---------- Zijpaneel voor code-bestanden (net als bij Claude zelf) ----------
 
   const artifactPanel = $('artifactPanel');
+  let currentArtifact = null;
 
-  function openArtifactPanel(id){
-    const data = artifactStore.get(id);
-    if (!data) return;
-    $('artifactPanelName').textContent = data.filename;
-    $('artifactPanelCode').textContent = data.content;
-    artifactPanel.dataset.currentId = id;
+  function showArtifact(filename, content){
+    currentArtifact = { filename, content };
+    $('artifactPanelName').textContent = filename;
+    $('artifactPanelCode').textContent = content;
     appRoot.classList.add('artifact-open');
     if (isMobileDevice()) closeMobileSidebar();
+    renderProjectFilesBar();
   }
   function closeArtifactPanel(){
     appRoot.classList.remove('artifact-open');
+    currentArtifact = null;
+    renderProjectFilesBar();
   }
   $('artifactPanelCloseBtn').addEventListener('click', closeArtifactPanel);
   $('artifactPanelCopyBtn').addEventListener('click', async (e) => {
-    const data = artifactStore.get(artifactPanel.dataset.currentId);
-    if (!data) return;
+    if (!currentArtifact) return;
     const btn = e.currentTarget;
     try {
-      await navigator.clipboard.writeText(data.content);
+      await navigator.clipboard.writeText(currentArtifact.content);
       btn.textContent = 'gekopieerd';
       setTimeout(() => { btn.textContent = 'kopieer'; }, 1400);
     } catch (err) { /* stil negeren */ }
   });
   $('artifactPanelDownloadBtn').addEventListener('click', () => {
-    const data = artifactStore.get(artifactPanel.dataset.currentId);
-    if (data) downloadTextFile(data.filename, data.content);
+    if (currentArtifact) downloadTextFile(currentArtifact.filename, currentArtifact.content);
   });
 
+  // Vaste balk vlak boven het invoerveld met alle bestanden uit dit
+  // project — zo hoef je niet naar boven te scrollen om erbij te kunnen,
+  // ook niet bij een lang gesprek.
+  function renderProjectFilesBar(){
+    const bar = $('projectFilesBar');
+    const files = extractProjectFiles();
+    if (!files.length) {
+      bar.style.display = 'none';
+      bar.innerHTML = '';
+      return;
+    }
+    bar.style.display = 'flex';
+    bar.innerHTML = files.map(f => {
+      const active = currentArtifact && currentArtifact.filename === f.path && appRoot.classList.contains('artifact-open');
+      return `<span class="project-files-bar-chip${active ? ' active' : ''}" data-path="${escapeHtml(f.path)}">📄 ${escapeHtml(f.path)}</span>`;
+    }).join('');
+    bar.querySelectorAll('[data-path]').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const f = files.find(x => x.path === chip.dataset.path);
+        if (f) showArtifact(f.path, f.content);
+      });
+    });
+  }
+
   function enhanceCodeBlocks(containerEl){
+    const chips = [];
     containerEl.querySelectorAll('pre > code').forEach(codeEl => {
       const preEl = codeEl.parentElement;
       if (!preEl || preEl.dataset.enhanced) return;
@@ -1990,7 +2035,7 @@
       // Geen bestandsnaam gevonden én maar een paar regels? Dan is dit
       // hoogstwaarschijnlijk gewoon een los voorbeeldcommando (bv. een
       // ansible-playbook-aanroep), geen echt bestand — laat het dan als
-      // gewoon codeblok staan, zonder nep-bestandsnaam als "bestand.sh".
+      // gewoon codeblok ter plekke staan, zonder nep-bestandsnaam.
       const lineCount = rawCode.split('\n').filter(l => l.trim() !== '').length;
       if (!filename && lineCount <= 3) return;
 
@@ -2006,12 +2051,20 @@
         <span class="code-file-chip-name">${escapeHtml(filename)}</span>
         <span class="code-file-chip-meta">${lineCount} regel${lineCount === 1 ? '' : 's'}</span>
       `;
-      preEl.parentNode.replaceChild(card, preEl);
+      card.addEventListener('click', () => showArtifact(filename, rawCode));
 
-      const artifactId = 'artifact-' + (artifactCounter++);
-      artifactStore.set(artifactId, { filename, content: rawCode });
-      card.addEventListener('click', () => openArtifactPanel(artifactId));
+      // Niet ter plekke invoegen — gewoon weghalen uit de tekst, en
+      // verzamelen om straks samen onderaan het bericht te tonen.
+      preEl.remove();
+      chips.push(card);
     });
+
+    if (chips.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'code-file-chips-wrap';
+      chips.forEach(c => wrap.appendChild(c));
+      containerEl.appendChild(wrap);
+    }
   }
 
   function addCopyButton(bubbleEl, rawText){
@@ -2269,6 +2322,7 @@
     const files = extractProjectFiles();
     projectBtn.style.display = files.length ? 'inline-flex' : 'none';
     if (files.length) projectBtn.textContent = '📁 Project (' + files.length + ')';
+    renderProjectFilesBar();
   }
 
   function formatFileSize(bytes){
