@@ -558,6 +558,10 @@
     display:flex; gap:11px;
     max-width: 760px;
   }
+  .msg > div:last-child{
+    min-width: 0; /* laat brede inhoud (zoals tabellen) intern scrollen i.p.v. de hele pagina breder te duwen */
+    flex: 1 1 0%; /* breedte expliciet vanuit de container berekenen, niet vanuit de inhoud */
+  }
   .msg.user{ align-self:flex-end; flex-direction:row-reverse; }
   .msg.system{ align-self:center; max-width:640px; }
 
@@ -623,8 +627,14 @@
     background: none; border: none; padding: 0; font-size: 12.5px; line-height:1.5;
   }
   .bubble.markdown hr{ border: none; border-top: 1px solid var(--border-soft); margin: 12px 0; }
-  .bubble.markdown table{ border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }
-  .bubble.markdown th, .bubble.markdown td{ border: 1px solid var(--border-soft); padding: 5px 9px; text-align:left; }
+  .table-scroll-wrap{
+    overflow-x:auto; margin-bottom:10px;
+    width: 0; min-width: 100%; /* forceert een echte, vaste breedte gebaseerd op de beschikbare ruimte, niet op de (bredere) inhoud */
+  }
+  .bubble.markdown table{
+    border-collapse: collapse; font-size: 12.5px; margin:0;
+  }
+  .bubble.markdown th, .bubble.markdown td{ border: 1px solid var(--border-soft); padding: 5px 9px; text-align:left; white-space:nowrap; }
 
   .code-file-chips-wrap{
     display:flex; flex-direction:column; gap:6px;
@@ -2220,6 +2230,20 @@
     return null;
   }
 
+  // Wikkelt elke tabel in de gerenderde markdown in een eigen scrollbare
+  // kader — anders duwt een brede tabel (veel kolommen, lange inhoud) de
+  // hele pagina breder in plaats van netjes zijn eigen scrollbalk te
+  // krijgen.
+  function wrapTables(containerEl){
+    containerEl.querySelectorAll('table').forEach(table => {
+      if (table.parentElement.classList.contains('table-scroll-wrap')) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'table-scroll-wrap';
+      table.parentNode.insertBefore(wrap, table);
+      wrap.appendChild(table);
+    });
+  }
+
   function enhanceCodeBlocks(containerEl){
     const chips = [];
     const filesInMessage = [];
@@ -2386,7 +2410,7 @@
         </div>
       `;
       if (content) addCopyButton(wrap.querySelector('.bubble'), content);
-      if (role === 'assistant') enhanceCodeBlocks(wrap.querySelector('.bubble'));
+      if (role === 'assistant') { wrapTables(wrap.querySelector('.bubble')); enhanceCodeBlocks(wrap.querySelector('.bubble')); }
     }
     messagesEl.appendChild(wrap);
     if (autoScrollToBottom) scrollMessagesToBottom();
@@ -2461,6 +2485,7 @@
         bubbleEl.classList.add('markdown');
         bubbleEl.innerHTML = renderMarkdownSafe(text || '(leeg antwoord)');
         addCopyButton(bubbleEl, text || '(leeg antwoord)');
+        wrapTables(bubbleEl);
         enhanceCodeBlocks(bubbleEl);
       },
       remove(){ wrap.remove(); }
