@@ -1733,6 +1733,12 @@
 
   // ---------- Server-side persistence (per account) ----------
 
+  // Voorkomt dat meerdere gelijktijdige achtergrondverzoeken (gesprek
+  // opslaan, geheugen bijwerken, titel genereren — die vaak vlak na
+  // elkaar vuren zodra een AI-antwoord klaar is) allemaal apart het
+  // inlogscherm proberen te tonen zodra er één keer een 401 langskomt.
+  let sessionExpiryHandled = false;
+
   async function apiFetch(path, options){
     options = options || {};
     const res = await fetch(path, {
@@ -1742,7 +1748,21 @@
       credentials: 'same-origin'
     });
     if (res.status === 401) {
-      showAuthScreen('login', 'Je sessie is verlopen. Log opnieuw in.');
+      // Niet meteen een lopend gesprek onderbreken op basis van één
+      // losse 401 van een verzoekje op de achtergrond — dat kan een
+      // kortstondige hapering zijn. Eerst dubbelchecken of de sessie
+      // écht ongeldig is voordat we het hele scherm overnemen.
+      if (!sessionExpiryHandled) {
+        let reallyExpired = true;
+        try {
+          const check = await fetch('/api/auth/me', { credentials: 'same-origin' });
+          reallyExpired = check.status === 401;
+        } catch (e) { /* netwerkfout bij het dubbelchecken: voorzichtigheidshalve aannemen dat de sessie echt weg is */ }
+        if (reallyExpired) {
+          sessionExpiryHandled = true;
+          showAuthScreen('login', 'Je sessie is verlopen. Log opnieuw in.');
+        }
+      }
       throw new Error('unauthenticated');
     }
     if (!res.ok) {
@@ -2057,7 +2077,27 @@
   // parsing, geen DOM-herbouw) en dus goedkoop genoeg om bij elk frame te
   // draaien, in tegenstelling tot de volledige markdown-render.
   function cleanStreamingText(text){
-    return text
+    // Staat er aan het eind een codeblok dat nog niet is afgesloten (de
+    // AI is 'm nog aan het schrijven)? Toon dan niet de hele, groeiende
+    // ruwe code — dat voelt traag aan, alsof je moet wachten tot alles is
+    // langsgekomen. Toon in plaats daarvan een korte, oplopende teller;
+    // zodra het blok wél sluit, klapt het vanzelf samen tot het bekende
+    // bestandskaartje (via enhanceCodeBlocks, na renderMarkdownSafe).
+    const lines = text.split('\n');
+    let fenceOpenAt = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (/^```/.test(lines[i].trim())) fenceOpenAt = (fenceOpenAt === -1) ? i : -1;
+    }
+    let working = text;
+    if (fenceOpenAt !== -1) {
+      const codeLines = lines.slice(fenceOpenAt + 1);
+      const lineCount = codeLines.filter(l => l.trim() !== '').length;
+      if (lineCount > 3) {
+        const before = lines.slice(0, fenceOpenAt).join('\n');
+        working = before + (before ? '\n\n' : '') + 'Bestand wordt geschreven — ' + lineCount + ' regel' + (lineCount === 1 ? '' : 's') + ' tot nu toe...';
+      }
+    }
+    return working
       .replace(/^```[a-zA-Z0-9_+-]*\s*$/gm, '')
       .replace(/^#{1,6}\s+/gm, '')
       .replace(/^-{3,}\s*$/gm, '')
@@ -3108,6 +3148,7 @@
     $('authUserLabel').textContent = username || '';
     $('accountAvatar').textContent = username ? username.slice(0, 1).toUpperCase() : '?';
     $('adminBtn').style.display = isAdmin ? 'flex' : 'none';
+    sessionExpiryHandled = false;
   }
 
   $('authToggleBtn').addEventListener('click', () => {
