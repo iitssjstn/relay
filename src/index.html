@@ -225,27 +225,34 @@
     font-size:12px; margin-top:4px; line-height:1.4;
   }
 
-  .conv-section{
-    padding: 16px 18px 4px;
-    border-bottom: 1px solid var(--border-soft);
-    display:flex;
-    flex-direction:column;
-    flex: 0 1 auto;
+  .sidebar-tabs{
+    display:flex; gap:4px;
+    padding: 10px 14px 0;
+    flex-shrink:0;
+  }
+  .sidebar-tab{
+    flex:1; display:flex; align-items:center; justify-content:center; gap:6px;
+    background:none; border:none; color: var(--text-faint);
+    font-size:12.5px; font-weight:500; padding:9px 6px;
+    border-radius:8px 8px 0 0; cursor:pointer;
+    border-bottom:2px solid transparent;
+    transition: color .15s ease, background .15s ease;
+  }
+  .sidebar-tab:hover{ color: var(--text-dim); background: var(--panel-2); }
+  .sidebar-tab.active{ color: var(--text); border-bottom-color: var(--amber); }
+  .sidebar-tab-icon{ font-family: var(--font-mono); font-size:12px; opacity:0.8; }
+
+  .sidebar-tab-panel{
+    padding: 14px 18px;
+    flex: 1 1 auto;
+    overflow-y:auto;
+    scrollbar-gutter: stable;
     min-height:0;
-    transition: flex-grow .25s ease;
+    border-bottom: 1px solid var(--border-soft);
   }
   .conv-list{
-    max-height: 132px;
-    overflow-y: auto;
-    scrollbar-gutter: stable;
-    margin-bottom: 4px;
-    transition: max-height .25s ease;
+    overflow-y: visible;
   }
-  /* Als de Ketting is ingeklapt, krijgt Gesprekken de vrijgekomen ruimte.
-     Alleen flex-grow verandert (basis/shrink blijven gelijk) zodat de
-     browser dit vloeiend kan animeren i.p.v. te laten springen. */
-  .sidebar.chain-collapsed .conv-section{ flex-grow: 1; }
-  .sidebar.chain-collapsed .conv-list{ flex: 1 1 auto; max-height: 2000px; }
   .conv-item{
     display:flex; align-items:center; gap:8px;
     padding: 7px 9px;
@@ -273,36 +280,6 @@
   .conv-empty-hint{
     font-size:11.5px; color: var(--text-faint); padding: 4px 2px 10px; line-height:1.5;
   }
-
-  .chain-section{
-    padding: 16px 18px 8px;
-    flex: 1 1 auto;
-    overflow-y:auto;
-    scrollbar-gutter: stable;
-    min-height:0;
-    transition: flex-grow .25s ease;
-  }
-  .sidebar.chain-collapsed .chain-section{ flex-grow: 0; }
-
-  .chain-toggle-btn{
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    padding:4px; border-radius:6px; line-height:1; font-size:15px;
-    width:24px; height:24px;
-    display:flex; align-items:center; justify-content:center;
-    transition: transform .2s ease, color .15s ease, border-color .15s ease;
-  }
-  .chain-toggle-btn:hover{ color: var(--text); border-color: var(--text-faint); }
-  .chain-toggle-btn.collapsed{ transform: rotate(-90deg); }
-
-  .chain-body-wrap{
-    display:grid;
-    grid-template-rows: 1fr;
-    transition: grid-template-rows .25s ease;
-  }
-  .chain-body-wrap.collapsed{ grid-template-rows: 0fr; }
-  .chain-body-inner{ overflow:hidden; min-height:0; }
 
   .chain-label{
     font-family: var(--font-mono);
@@ -417,10 +394,46 @@
   .add-node-btn:hover{ border-color: var(--amber); color: var(--amber); }
 
   .sidebar-footer{
-    padding: 12px 18px 16px;
+    padding: 8px 10px;
     border-top: 1px solid var(--border-soft);
     display:flex; gap:8px;
+    flex-shrink:0;
   }
+  .account-row{
+    width:100%; display:flex; align-items:center; gap:9px;
+    background:none; border:none; border-radius:9px;
+    padding: 8px 9px; cursor:pointer;
+    transition: background .12s ease;
+  }
+  .account-row:hover{ background: var(--panel-2); }
+  .account-avatar{
+    width:26px; height:26px; border-radius:50%; flex-shrink:0;
+    background: var(--amber); color:#1a1305;
+    display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:700; font-family: var(--font-mono);
+  }
+  .account-name{
+    flex:1; text-align:left; font-size:12.5px; color: var(--text-dim);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .account-chevron{ color: var(--text-faint); font-size:11px; flex-shrink:0; }
+
+  .account-popup{
+    position:fixed; z-index:70;
+    background: var(--panel); border:1px solid var(--border);
+    border-radius:10px; padding:6px;
+    min-width:200px;
+    box-shadow: 0 10px 32px rgba(0,0,0,0.5);
+  }
+  .account-popup-item{
+    width:100%; display:flex; align-items:center; gap:9px;
+    background:none; border:none; color: var(--text-dim);
+    font-size:13px; padding:8px 10px; border-radius:7px; text-align:left;
+  }
+  .account-popup-item:hover{ background: var(--panel-2); color: var(--text); }
+  .account-popup-item.danger:hover{ color: var(--danger); }
+  .account-popup-divider{ height:1px; background: var(--border-soft); margin:5px 4px; }
+
   .ghost-btn{
     flex:1;
     background: var(--panel-2);
@@ -985,44 +998,43 @@
       </div>
       <div class="brand-sub">Eén gesprek, meerdere AI's. Loopt de eerste tegen zijn contextlimiet aan, dan neemt de volgende het stokje over.</div>
     </div>
-    <div class="conv-section">
-      <div class="chain-label"><span>Gesprekken</span></div>
+
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" id="tabBtnChats" data-tab="chats">Chats</button>
+      <button class="sidebar-tab" id="tabBtnChain" data-tab="chain"><span class="sidebar-tab-icon">&lt;/&gt;</span>Ketting</button>
+    </div>
+
+    <div class="sidebar-tab-panel" id="tabPanelChats">
       <button class="add-node-btn" id="newConvBtn" style="margin-bottom:8px;">+ Nieuw gesprek</button>
       <div class="conv-list" id="convList"></div>
     </div>
 
-    <div class="chain-section">
-      <div class="chain-label">
-        <span>Ketting</span>
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span id="chainCount"></span>
-          <button class="chain-toggle-btn" id="chainToggleBtn" title="Ketting in-/uitklappen" aria-expanded="true">▾</button>
-        </span>
-      </div>
-      <div class="chain-body-wrap" id="chainBodyWrap">
-        <div class="chain-body-inner">
-          <div id="nodeList"></div>
-          <button class="add-node-btn" id="addNodeBtn">+ AI toevoegen aan de ketting</button>
-        </div>
-      </div>
-    </div>
-    <div class="sidebar-footer" style="flex-direction:column; gap:10px;">
-      <div style="display:flex; gap:8px; width:100%;">
+    <div class="sidebar-tab-panel" id="tabPanelChain" style="display:none;">
+      <div id="nodeList"></div>
+      <button class="add-node-btn" id="addNodeBtn">+ AI toevoegen aan de ketting</button>
+      <div style="display:flex; gap:8px; width:100%; margin-top:14px;">
         <button class="ghost-btn" id="exportBtn">Exporteer config</button>
         <button class="ghost-btn" id="importBtn">Importeer config</button>
         <input type="file" id="importFile" accept="application/json" style="display:none">
       </div>
-      <div style="border-top:1px solid var(--border-soft); padding-top:10px; width:100%;">
-        <div id="authUserLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
-        <div style="display:flex; gap:6px; width:100%; flex-wrap:wrap;">
-          <button class="ghost-btn" id="memoryBtn" style="flex:1; min-width:80px;">Geheugen</button>
-          <button class="ghost-btn" id="githubTokenBtn" style="flex:1; min-width:80px;">GitHub</button>
-          <button class="ghost-btn" id="adminBtn" style="display:none; flex:1; min-width:80px;">Beheer</button>
-          <button class="ghost-btn" id="logoutBtn" style="flex:1; min-width:80px;">Uitloggen</button>
-        </div>
-      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="account-row" id="accountMenuBtn">
+        <span class="account-avatar" id="accountAvatar">?</span>
+        <span class="account-name" id="authUserLabel"></span>
+        <span class="account-chevron">⌄</span>
+      </button>
     </div>
   </aside>
+
+  <div class="account-popup" id="accountPopup" style="display:none;">
+    <button class="account-popup-item" id="memoryBtn">Geheugen</button>
+    <button class="account-popup-item" id="githubTokenBtn">GitHub</button>
+    <button class="account-popup-item" id="adminBtn" style="display:none;">Beheer</button>
+    <div class="account-popup-divider"></div>
+    <button class="account-popup-item danger" id="logoutBtn">↪ Uitloggen</button>
+  </div>
 
   <main class="main">
     <div class="chat-header">
@@ -1048,9 +1060,9 @@
     <div class="composer">
       <div class="image-preview-strip" id="imagePreviewStrip" style="display:none;"></div>
       <div class="attach-menu" id="attachMenu">
-        <button type="button" id="attachCameraBtn" class="attach-menu-item">📷 Foto maken</button>
-        <button type="button" id="attachGalleryBtn" class="attach-menu-item">🖼️ Kies bestand</button>
-        <button type="button" id="attachGithubBtn" class="attach-menu-item">🐙 GitHub</button>
+        <button type="button" id="attachCameraBtn" class="attach-menu-item">Foto maken</button>
+        <button type="button" id="attachGalleryBtn" class="attach-menu-item">Kies bestand</button>
+        <button type="button" id="attachGithubBtn" class="attach-menu-item">GitHub</button>
       </div>
       <div class="composer-box">
         <button class="attach-btn" id="attachImageBtn" title="Afbeelding toevoegen" disabled>+</button>
@@ -1362,11 +1374,8 @@
 
   scrollBottomBtn.addEventListener('click', scrollMessagesToBottom);
 
-  const chainCount = $('chainCount');
   const convListEl = $('convList');
   const sidebarEl = $('sidebar');
-  const chainBodyWrap = $('chainBodyWrap');
-  const chainToggleBtn = $('chainToggleBtn');
   const attachImageBtn = $('attachImageBtn');
   const imageInput = $('imageInput');
   const cameraInput = $('cameraInput');
@@ -1418,12 +1427,11 @@
       </div>
     `).join('');
     const fileChips = pendingFiles.map((f, i) => {
-      const icon = f.kind === 'repo' ? '📦' : '📄';
       const label = f.kind === 'repo' ? `${f.name} (${f.includedCount} bestanden)` : f.name;
       const title = f.kind === 'repo' ? `${f.name}@${f.branch}` : (f.path || f.name);
       return `
       <div class="file-chip">
-        <span class="file-chip-name" title="${escapeHtml(title)}">${icon} ${escapeHtml(label)}</span>
+        <span class="file-chip-name" title="${escapeHtml(title)}">${escapeHtml(label)}</span>
         <button class="file-chip-remove" data-fidx="${i}" title="Verwijderen">✕</button>
       </div>
     `;
@@ -1604,13 +1612,57 @@
     }
   });
 
-  let chainCollapsed = false;
-  chainToggleBtn.addEventListener('click', () => {
-    chainCollapsed = !chainCollapsed;
-    chainBodyWrap.classList.toggle('collapsed', chainCollapsed);
-    chainToggleBtn.classList.toggle('collapsed', chainCollapsed);
-    chainToggleBtn.setAttribute('aria-expanded', String(!chainCollapsed));
-    sidebarEl.classList.toggle('chain-collapsed', chainCollapsed);
+  // ---------- Zijbalk-tabs (Chats / Ketting) ----------
+
+  const tabBtnChats = $('tabBtnChats');
+  const tabBtnChain = $('tabBtnChain');
+  const tabPanelChats = $('tabPanelChats');
+  const tabPanelChain = $('tabPanelChain');
+
+  function switchSidebarTab(tab){
+    const isChats = tab === 'chats';
+    tabBtnChats.classList.toggle('active', isChats);
+    tabBtnChain.classList.toggle('active', !isChats);
+    tabPanelChats.style.display = isChats ? 'block' : 'none';
+    tabPanelChain.style.display = isChats ? 'none' : 'block';
+  }
+  tabBtnChats.addEventListener('click', () => switchSidebarTab('chats'));
+  tabBtnChain.addEventListener('click', () => switchSidebarTab('chain'));
+
+  // ---------- Accountpopup (Geheugen/GitHub/Beheer/Uitloggen) ----------
+
+  const accountMenuBtn = $('accountMenuBtn');
+  const accountPopup = $('accountPopup');
+
+  function openAccountPopup(){
+    const rect = accountMenuBtn.getBoundingClientRect();
+    accountPopup.style.display = 'block';
+    // Eerst tonen (nodig om de eigen afmeting te kunnen meten), dan pas
+    // positioneren boven de accountregel, netjes binnen het scherm.
+    const popupHeight = accountPopup.offsetHeight;
+    const popupWidth = accountPopup.offsetWidth;
+    let top = rect.top - popupHeight - 6;
+    if (top < 8) top = rect.bottom + 6; // te weinig ruimte erboven -> eronder tonen
+    let left = rect.left;
+    if (left + popupWidth > window.innerWidth - 8) left = window.innerWidth - popupWidth - 8;
+    accountPopup.style.top = top + 'px';
+    accountPopup.style.left = left + 'px';
+  }
+  function closeAccountPopup(){ accountPopup.style.display = 'none'; }
+
+  accountMenuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (accountPopup.style.display === 'block') closeAccountPopup();
+    else openAccountPopup();
+  });
+  document.addEventListener('click', (e) => {
+    if (accountPopup.style.display === 'block' && !accountPopup.contains(e.target) && e.target !== accountMenuBtn) {
+      closeAccountPopup();
+    }
+  });
+  // Elk item in de popup sluit 'm ook meteen weer na een klik.
+  accountPopup.querySelectorAll('.account-popup-item').forEach(btn => {
+    btn.addEventListener('click', () => closeAccountPopup());
   });
 
   function uid(){ return 'n' + Math.random().toString(36).slice(2, 9); }
@@ -1838,7 +1890,7 @@
 
   function renderNodes(){
     nodeList.innerHTML = '';
-    chainCount.textContent = nodes.length ? nodes.length + ' AI' + (nodes.length > 1 ? "'s" : '') : '';
+    tabBtnChain.innerHTML = '<span class="sidebar-tab-icon">&lt;/&gt;</span>Ketting' + (nodes.length ? ' · ' + nodes.length : '');
     nodes.forEach((node, i) => {
       const el = document.createElement('div');
       el.className = 'node' + (i === activeIndex ? ' active' : '') + ((node.status === 'exhausted' || node.status === 'cooldown') ? ' exhausted' : '') + (node.status === 'error' ? ' error' : '');
@@ -2095,7 +2147,6 @@
       const card = document.createElement('div');
       card.className = 'code-file-chip';
       card.innerHTML = `
-        <span class="code-file-chip-icon">📄</span>
         <span class="code-file-chip-name">${escapeHtml(filename)}</span>
         <span class="code-file-chip-meta">${lineCount} regel${lineCount === 1 ? '' : 's'}</span>
       `;
@@ -2119,7 +2170,7 @@
         const zipBtn = document.createElement('button');
         zipBtn.type = 'button';
         zipBtn.className = 'code-file-chip code-file-zip-btn';
-        zipBtn.innerHTML = `<span class="code-file-chip-icon">🗜️</span><span class="code-file-chip-name">Alle ${filesInMessage.length} bestanden als ZIP</span>`;
+        zipBtn.innerHTML = `<span class="code-file-chip-name">Alle ${filesInMessage.length} bestanden als ZIP</span>`;
         zipBtn.addEventListener('click', async () => {
           if (!window.JSZip) {
             zipBtn.querySelector('.code-file-chip-name').textContent = 'ZIP-bibliotheek niet beschikbaar — download bestanden los';
@@ -2180,10 +2231,9 @@
         : '';
       const filesHtml = (opts.files && opts.files.length)
         ? `<div class="bubble-files">${opts.files.map(f => {
-            const icon = f.kind === 'repo' ? '📦' : '📄';
             const label = f.kind === 'repo' ? `${f.name} (${f.includedCount} bestanden)` : f.name;
             const title = f.kind === 'repo' ? `${f.name}@${f.branch}` : (f.path || f.name);
-            return `<span class="file-chip" title="${escapeHtml(title)}"><span class="file-chip-name">${icon} ${escapeHtml(label)}</span></span>`;
+            return `<span class="file-chip" title="${escapeHtml(title)}"><span class="file-chip-name">${escapeHtml(label)}</span></span>`;
           }).join('')}</div>`
         : '';
       const bubbleHtml = role === 'assistant'
@@ -2554,7 +2604,7 @@
       return false;
     }
     activeIndex += 1;
-    addMessage('system', '🔁 ' + reason + ' — schakel over naar ' + nodes[activeIndex].name + ', gesprek loopt door.', { cls: 'handoff' });
+    addMessage('system', reason + ' — schakel over naar ' + nodes[activeIndex].name + ', gesprek loopt door.', { cls: 'handoff' });
     renderNodes();
     return true;
   }
@@ -2906,8 +2956,9 @@
     authOverlay.style.display = 'none';
     appRoot.classList.remove('hidden');
     mobileTopbar.classList.add('show');
-    $('authUserLabel').textContent = username ? '@' + username : '';
-    $('adminBtn').style.display = isAdmin ? 'block' : 'none';
+    $('authUserLabel').textContent = username || '';
+    $('accountAvatar').textContent = username ? username.slice(0, 1).toUpperCase() : '?';
+    $('adminBtn').style.display = isAdmin ? 'flex' : 'none';
   }
 
   $('authToggleBtn').addEventListener('click', () => {
