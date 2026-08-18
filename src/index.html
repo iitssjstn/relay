@@ -742,6 +742,11 @@
   }
   .send-btn:hover{ transform: translateY(-1px); }
   .send-btn:disabled{ opacity:0.35; cursor:not-allowed; transform:none; }
+  .stop-btn{
+    background: var(--danger-dim); color: var(--danger); border:1px solid var(--danger);
+    font-size:13px;
+  }
+  .stop-btn:hover{ background: var(--danger); color:#fff; }
   .composer-hint{
     font-size:10.5px; color: var(--text-faint); margin-top:7px; text-align:center;
     font-family: var(--font-mono);
@@ -1083,6 +1088,7 @@
         <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
         <textarea id="input" rows="1" placeholder="Typ je vraag..." disabled></textarea>
         <button class="send-btn" id="sendBtn" disabled>↑</button>
+        <button class="send-btn stop-btn" id="stopBtn" style="display:none;" title="Stoppen">■</button>
       </div>
       <div class="composer-hint">API-keys en gesprekken worden bewaard bij jouw account op deze Relay-server. Berichten lopen via de Relay-server naar de AI-provider die je zelf kiest (dat voorkomt browserblokkades bij sommige providers) — de server bewaart of leest de inhoud daarvan niet. Log volgende keer gewoon in om verder te gaan.</div>
     </div>
@@ -1307,6 +1313,7 @@
   let conversation = [];   // {role: 'user'|'assistant', content, images?: [dataUrl,...]}
   let editingId = null;
   let sending = false;
+  let currentAbortController = null;
   let memoryEntries = [];  // {id, category, title, content, updatedAt} — gestructureerd geheugen, net als bij Claude zelf
   let memoryAutoUpdateEnabled = true;
 
@@ -1358,6 +1365,7 @@
   const emptyState = $('emptyState');
   const input = $('input');
   const sendBtn = $('sendBtn');
+  const stopBtn = $('stopBtn');
   const activeBadge = $('activeBadge');
 
   // Blijf alleen automatisch meescrollen zolang de gebruiker niet zelf
@@ -2016,6 +2024,8 @@
     input.disabled = !ready;
     attachImageBtn.disabled = !ready;
     sendBtn.disabled = !ready || (!input.value.trim() && !pendingImages.length && !pendingFiles.length);
+    sendBtn.style.display = sending ? 'none' : 'flex';
+    stopBtn.style.display = sending ? 'flex' : 'none';
     if (ready && wasDisabled) {
       // Het veld verloor de focus toen het disabled werd tijdens het
       // versturen — die krijgt de browser niet vanzelf terug, dus
@@ -2582,6 +2592,9 @@
     renderImagePreviews();
   });
   sendBtn.addEventListener('click', trySend);
+  stopBtn.addEventListener('click', () => {
+    if (currentAbortController) currentAbortController.abort();
+  });
 
   function trySend(){
     const text = input.value.trim();
@@ -2636,13 +2649,17 @@
       renderNodes();
       const streamHandle = beginStreamingMessage(node.name);
 
+      currentAbortController = new AbortController();
+      let partialSoFar = '';
       try {
-        const replyText = await callProvider(node, conversation, {}, (partial) => {
+        const replyText = await callProvider(node, conversation, { signal: currentAbortController.signal }, (partial) => {
+          partialSoFar = partial;
           streamHandle.update(partial);
         });
         streamHandle.finish(replyText);
         node.status = 'done';
         node.coolDownUntil = null;
+        currentAbortController = null;
         const wasFirstExchange = conversation.length === 1; // vóór het toevoegen van dit AI-antwoord
         conversation.push({ role: 'assistant', content: replyText, providerName: node.name });
         renderNodes();
@@ -2653,6 +2670,20 @@
         if (wasFirstExchange) maybeGenerateConversationTitle(node, currentConvId, lastUserText, replyText);
         return;
       } catch (err) {
+        currentAbortController = null;
+        if (err.name === 'AbortError') {
+          // Zelf gestopt — bewaar wat er al binnen was als het antwoord,
+          // in plaats van het weg te gooien of als fout te tonen.
+          const finalText = partialSoFar.trim() || '(gestopt)';
+          streamHandle.finish(finalText);
+          node.status = 'done';
+          conversation.push({ role: 'assistant', content: finalText, providerName: node.name });
+          renderNodes();
+          sending = false;
+          updateComposerState();
+          saveCurrentConversation();
+          return;
+        }
         streamHandle.remove();
         if (err.isContextLimit) {
           const handedOff = handOffToNext(node, 'contextlimiet bereikt bij ' + node.name);
@@ -2848,12 +2879,13 @@
   // blokkades die sommige providers (bv. Groq) opwerpen tegen directe
   // browseraanroepen. De server bewaart of leest de inhoud niet, hij
   // stuurt 'm alleen gestreamd door.
-  async function proxyFetch(targetUrl, headers, body){
+  async function proxyFetch(targetUrl, headers, body, signal){
     return fetch('/api/relay-proxy', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: targetUrl, headers, body })
+      body: JSON.stringify({ url: targetUrl, headers, body }),
+      signal
     });
   }
 
@@ -2871,7 +2903,7 @@
       'x-api-key': node.apiKey,
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true'
-    }, body);
+    }, body, opts.signal);
     const rlInfo1 = extractRateLimitInfo(res, 'anthropic');
     if (rlInfo1) node.rateLimitInfo = rlInfo1;
     if (!res.ok) {
@@ -2908,7 +2940,7 @@
       max_tokens: node.maxOutput || 4096,
       messages,
       stream: true
-    });
+    }, opts.signal);
     const rlInfo2 = extractRateLimitInfo(res, 'openai');
     if (rlInfo2) node.rateLimitInfo = rlInfo2;
     if (!res.ok) {
@@ -2944,7 +2976,7 @@
       generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
     };
     if (opts.injectMemory !== false) body.systemInstruction = { parts: [{ text: buildSystemText() }] };
-    const res = await proxyFetch(url, { 'Content-Type': 'application/json' }, body);
+    const res = await proxyFetch(url, { 'Content-Type': 'application/json' }, body, opts.signal);
     if (!res.ok) {
       const bodyText = await res.text();
       if (isContextLimitError('google', res.status, bodyText)) {

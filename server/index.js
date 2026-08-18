@@ -215,22 +215,67 @@ app.put('/api/nodes', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- Geheugen (notities over jezelf, gaan mee in elk gesprek) ----------
+// ---------- Geheugen (gestructureerd: losse, benoemde items per categorie) ----------
 
-const MEMORY_MAX_CHARS = 4000;
+const MEMORY_ENTRY_MAX_CHARS = 3000;
+const MEMORY_TITLE_MAX_CHARS = 80;
+const MEMORY_MAX_ENTRIES = 40; // redelijke bovengrens, voorkomt een oneindig groeiend systeembericht
+const MEMORY_CATEGORIES = ['profile', 'topic', 'area'];
 
-app.get('/api/memory', requireAuth, (req, res) => {
-  const row = db.prepare('SELECT memory FROM users WHERE id = ?').get(req.user.uid);
-  res.json({ memory: row ? row.memory : '' });
+app.get('/api/memory-settings', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT memory_auto_update FROM users WHERE id = ?').get(req.user.uid);
+  res.json({ autoUpdate: !!(row && row.memory_auto_update) });
 });
 
-app.put('/api/memory', requireAuth, (req, res) => {
-  let { memory } = req.body || {};
-  if (typeof memory !== 'string') memory = '';
-  if (memory.length > MEMORY_MAX_CHARS) {
-    return res.status(400).json({ error: `Maximaal ${MEMORY_MAX_CHARS} tekens.` });
+app.put('/api/memory-settings', requireAuth, (req, res) => {
+  const autoUpdate = req.body && req.body.autoUpdate ? 1 : 0;
+  db.prepare('UPDATE users SET memory_auto_update = ? WHERE id = ?').run(autoUpdate, req.user.uid);
+  res.json({ autoUpdate: !!autoUpdate });
+});
+
+app.get('/api/memory-entries', requireAuth, (req, res) => {
+  const rows = db.prepare(
+    'SELECT id, category, title, content, updated_at as updatedAt FROM memory_entries WHERE user_id = ? ORDER BY updated_at DESC'
+  ).all(req.user.uid);
+  res.json(rows);
+});
+
+function validateMemoryEntry(body){
+  const category = MEMORY_CATEGORIES.includes(body.category) ? body.category : 'topic';
+  const title = (body.title || '').toString().trim().slice(0, MEMORY_TITLE_MAX_CHARS);
+  const content = (body.content || '').toString().slice(0, MEMORY_ENTRY_MAX_CHARS);
+  if (!title) return null;
+  return { category, title, content };
+}
+
+app.post('/api/memory-entries', requireAuth, (req, res) => {
+  const entry = validateMemoryEntry(req.body || {});
+  if (!entry) return res.status(400).json({ error: 'Titel is verplicht.' });
+  const count = db.prepare('SELECT COUNT(*) as n FROM memory_entries WHERE user_id = ?').get(req.user.uid).n;
+  if (count >= MEMORY_MAX_ENTRIES) {
+    return res.status(400).json({ error: `Maximaal ${MEMORY_MAX_ENTRIES} geheugen-items.` });
   }
-  db.prepare('UPDATE users SET memory = ? WHERE id = ?').run(memory, req.user.uid);
+  const now = Date.now();
+  const info = db.prepare(
+    'INSERT INTO memory_entries (user_id, category, title, content, updated_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(req.user.uid, entry.category, entry.title, entry.content, now);
+  res.json({ id: info.lastInsertRowid, ...entry, updatedAt: now });
+});
+
+app.put('/api/memory-entries/:id', requireAuth, (req, res) => {
+  const entry = validateMemoryEntry(req.body || {});
+  if (!entry) return res.status(400).json({ error: 'Titel is verplicht.' });
+  const existing = db.prepare('SELECT id FROM memory_entries WHERE id = ? AND user_id = ?').get(req.params.id, req.user.uid);
+  if (!existing) return res.status(404).json({ error: 'Niet gevonden.' });
+  const now = Date.now();
+  db.prepare(
+    'UPDATE memory_entries SET category = ?, title = ?, content = ?, updated_at = ? WHERE id = ? AND user_id = ?'
+  ).run(entry.category, entry.title, entry.content, now, req.params.id, req.user.uid);
+  res.json({ id: Number(req.params.id), ...entry, updatedAt: now });
+});
+
+app.delete('/api/memory-entries/:id', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM memory_entries WHERE id = ? AND user_id = ?').run(req.params.id, req.user.uid);
   res.json({ ok: true });
 });
 
@@ -500,11 +545,20 @@ app.post('/api/relay-proxy', requireAuth, async (req, res) => {
   if (!url || isBlockedProxyTarget(url)) {
     return res.status(400).json({ error: 'Ongeldige of niet-toegestane proxy-bestemming.' });
   }
+
+  // Breekt de browser de verbinding met Relay zelf af (bv. via de
+  // stopknop), dan breken we ook de aanroep naar de AI-provider zelf af
+  // — anders blijft de server zinloos doorlezen en tokens verbruiken bij
+  // een AI die niemand meer luistert.
+  const upstreamController = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) upstreamController.abort(); });
+
   try {
     const providerRes = await fetch(url, {
       method: 'POST',
       headers: headers || {},
-      body: typeof body === 'string' ? body : JSON.stringify(body)
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+      signal: upstreamController.signal
     });
 
     res.status(providerRes.status);
@@ -529,7 +583,14 @@ app.post('/api/relay-proxy', requireAuth, async (req, res) => {
     }
     res.end();
   } catch (e) {
-    res.status(502).json({ error: 'Kon de AI-provider niet bereiken: ' + e.message });
+    // Headers al verstuurd (bv. streaming was al bezig toen het misging)?
+    // Dan kan er geen nette JSON-foutmelding meer bij — gewoon afsluiten
+    // i.p.v. crashen op "Cannot set headers after they are sent".
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Kon de AI-provider niet bereiken: ' + e.message });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
   }
 });
 
