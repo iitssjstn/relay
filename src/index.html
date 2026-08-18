@@ -813,6 +813,33 @@
   }
   .memory-empty{ padding: 20px 12px; text-align:center; color: var(--text-faint); font-size:12.5px; }
 
+  .memory-entry-desc{
+    font-size:11.5px; color: var(--text-faint); margin-top:2px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+
+  .memory-toggle-row{
+    display:flex; align-items:center; justify-content:space-between; gap:14px;
+    background: var(--panel-2); border:1px solid var(--border-soft); border-radius:8px;
+    padding: 10px 12px; margin-bottom:14px;
+  }
+  .memory-toggle-label{ font-size:12.5px; color: var(--text); font-weight:500; }
+  .memory-toggle-sub{ font-size:11px; color: var(--text-faint); margin-top:2px; line-height:1.4; }
+  .memory-toggle-switch{
+    position:relative; display:inline-block; width:36px; height:20px; flex-shrink:0; cursor:pointer;
+  }
+  .memory-toggle-switch input{ opacity:0; width:0; height:0; }
+  .memory-toggle-slider{
+    position:absolute; inset:0; background: var(--border); border-radius:999px;
+    transition: background .15s ease;
+  }
+  .memory-toggle-slider::before{
+    content:''; position:absolute; width:14px; height:14px; left:3px; top:3px;
+    background:#fff; border-radius:50%; transition: transform .15s ease;
+  }
+  .memory-toggle-switch input:checked + .memory-toggle-slider{ background: var(--relay-green); }
+  .memory-toggle-switch input:checked + .memory-toggle-slider::before{ transform: translateX(16px); }
+
   .bubble-files{
     display:flex; gap:6px; flex-wrap:wrap; margin-bottom: 8px;
   }
@@ -1116,7 +1143,18 @@
 <div class="modal-overlay" id="memoryOverlay" style="display:none;">
   <div class="modal" style="max-width:480px;">
     <h2>Geheugen</h2>
-    <div class="modal-sub">Relay leert dit automatisch bij tijdens je gesprekken, gegroepeerd per onderwerp — net als bij Claude zelf. Klik op een item om de inhoud te bekijken of te verwijderen, of vertel hieronder wat er moet veranderen.</div>
+    <div class="modal-sub">Relay leert dit automatisch bij tijdens je gesprekken, gegroepeerd per onderwerp — net als bij Claude zelf. Klik op een item om de volledige inhoud te bekijken of te verwijderen, of vertel hieronder wat er moet veranderen.</div>
+
+    <div class="memory-toggle-row">
+      <div>
+        <div class="memory-toggle-label">Automatisch geheugen genereren</div>
+        <div class="memory-toggle-sub">Sta Relay toe om na elk antwoord bij te houden wat het onthoudt uit je gesprekken.</div>
+      </div>
+      <label class="memory-toggle-switch">
+        <input type="checkbox" id="memoryAutoUpdateToggle" checked>
+        <span class="memory-toggle-slider"></span>
+      </label>
+    </div>
 
     <div id="memoryListWrap" style="max-height:320px; overflow-y:auto; margin-bottom:14px;"></div>
 
@@ -1240,8 +1278,9 @@
   let editingId = null;
   let sending = false;
   let memoryEntries = [];  // {id, category, title, content, updatedAt} — gestructureerd geheugen, net als bij Claude zelf
+  let memoryAutoUpdateEnabled = true;
 
-  const MEMORY_CATEGORY_LABELS = { profile: 'Profiel', topic: 'Topics', area: 'Areas' };
+  const MEMORY_CATEGORY_LABELS = { profile: 'Jij', topic: 'Topics', area: 'Areas' };
 
   // Vaste, niet-zichtbare instructie die altijd meegaat naar elke AI —
   // los van het persoonlijke geheugen — zodat gegenereerde bestanden
@@ -2924,6 +2963,10 @@
     await loadNodesFromServer();
     await loadConvIndexFromServer();
     await loadMemoryFromServer();
+    try {
+      const settings = await apiFetch('/api/memory-settings');
+      memoryAutoUpdateEnabled = !!settings.autoUpdate;
+    } catch (e) { /* standaard aan laten staan */ }
     if (convIndex.length > 0) {
       await loadConversationById(convIndex[0].id);
     } else {
@@ -2965,12 +3008,17 @@
       grouped[cat].forEach(entry => {
         const i = rowIdx++;
         rowMeta.push(entry);
+        const desc = entry.content.replace(/\s+/g, ' ').trim();
+        const descPreview = desc.length > 70 ? desc.slice(0, 70) + '…' : desc;
         html += `
           <div class="memory-entry-item">
             <div class="memory-entry-row" data-toggle-idx="${i}">
-              <span class="memory-entry-title-wrap">
-                <span class="memory-entry-chevron" id="memChevron${i}">▸</span>
-                <span class="memory-entry-title">${escapeHtml(entry.title)}</span>
+              <span class="memory-entry-title-wrap" style="flex-direction:column; align-items:flex-start; gap:0;">
+                <span style="display:flex; align-items:center; gap:7px;">
+                  <span class="memory-entry-chevron" id="memChevron${i}">▸</span>
+                  <span class="memory-entry-title">${escapeHtml(entry.title)}</span>
+                </span>
+                <span class="memory-entry-desc" style="margin-left:17px;">${escapeHtml(descPreview)}</span>
               </span>
               <span style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
                 <span class="memory-entry-date">${formatMemoryDate(entry.updatedAt)}</span>
@@ -3015,7 +3063,7 @@
   // zelf, in plaats van steeds één hele lap tekst te herschrijven.
   let memoryUpdateInFlight = false;
   async function autoUpdateMemory(node, userText, assistantText){
-    if (memoryUpdateInFlight || !userText || !assistantText) return;
+    if (!memoryAutoUpdateEnabled || memoryUpdateInFlight || !userText || !assistantText) return;
     memoryUpdateInFlight = true;
     try {
       const existingListing = memoryEntries.length
@@ -3071,12 +3119,28 @@
     }
   }
 
-  function openMemoryModal(){
+  async function openMemoryModal(){
     $('memoryMsg').style.display = 'none';
     $('memoryInstructionInput').value = '';
     renderMemoryList();
     memoryOverlay.style.display = 'flex';
+    try {
+      const settings = await apiFetch('/api/memory-settings');
+      memoryAutoUpdateEnabled = !!settings.autoUpdate;
+      $('memoryAutoUpdateToggle').checked = memoryAutoUpdateEnabled;
+    } catch (e) { /* laat de laatst bekende stand staan */ }
   }
+
+  $('memoryAutoUpdateToggle').addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    memoryAutoUpdateEnabled = enabled; // meteen lokaal toepassen, niet wachten op de server
+    try {
+      await apiFetch('/api/memory-settings', { method: 'PUT', body: { autoUpdate: enabled } });
+    } catch (err) {
+      e.target.checked = !enabled;
+      memoryAutoUpdateEnabled = !enabled;
+    }
+  });
 
   $('memoryBtn').addEventListener('click', openMemoryModal);
   $('memoryCloseBtn').addEventListener('click', () => { memoryOverlay.style.display = 'none'; });
