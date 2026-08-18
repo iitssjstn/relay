@@ -1809,7 +1809,7 @@
     try {
       const prompt = 'Geef een korte, duidelijke titel (max 6 woorden) voor dit gesprek, gebaseerd op deze uitwisseling. Antwoord ALLEEN met de titel zelf — geen aanhalingstekens, geen opmaak, geen uitleg, geen punt aan het einde.\n\nGebruiker: ' + userText + '\nAI: ' + assistantText;
       const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
-      let title = (raw || '').trim().replace(/^["'*]+|["'*]+$/g, '').replace(/\.$/, '').replace(/\s+/g, ' ').slice(0, 60);
+      let title = (raw.text || '').trim().replace(/^["'*]+|["'*]+$/g, '').replace(/\.$/, '').replace(/\s+/g, ' ').slice(0, 60);
       if (!title) return;
       aiGeneratedTitles.set(convId, title);
       if (currentConvId === convId) await saveCurrentConversation();
@@ -2650,12 +2650,33 @@
       const streamHandle = beginStreamingMessage(node.name);
 
       currentAbortController = new AbortController();
+      let accumulated = '';
       let partialSoFar = '';
+      // Sommige AI's lopen tegen hun eigen antwoordlimiet aan (niet de
+      // contextlimiet) en willen dan zelf het antwoord in delen opknippen
+      // die je handmatig achter elkaar moet plakken. Dat doen we hier
+      // automatisch: bij een afgekapt antwoord vragen we gewoon een
+      // vervolg op, en plakken dat naadloos aan elkaar — tot een redelijke
+      // bovengrens, voor het geval een AI dit patroon blijft herhalen.
+      const MAX_CONTINUATIONS = 8;
       try {
-        const replyText = await callProvider(node, conversation, { signal: currentAbortController.signal }, (partial) => {
-          partialSoFar = partial;
-          streamHandle.update(partial);
-        });
+        let truncated = false;
+        let continuations = 0;
+        do {
+          const historyForThisCall = accumulated
+            ? [...conversation, { role: 'assistant', content: accumulated }]
+            : conversation;
+          const result = await callProvider(node, historyForThisCall, { signal: currentAbortController.signal }, (partial) => {
+            partialSoFar = accumulated + partial;
+            streamHandle.update(partialSoFar);
+          });
+          accumulated += result.text;
+          partialSoFar = accumulated;
+          truncated = result.truncated;
+          continuations++;
+        } while (truncated && continuations < MAX_CONTINUATIONS);
+
+        const replyText = accumulated.trim() || '(leeg antwoord)';
         streamHandle.finish(replyText);
         node.status = 'done';
         node.coolDownUntil = null;
@@ -2917,15 +2938,18 @@
       throw new Error(parseErrMsg(bodyText, res.status));
     }
     let full = '';
+    let stopReason = null;
     await streamSSE(res, (evt) => {
       if (evt.type === 'content_block_delta' && evt.delta && typeof evt.delta.text === 'string') {
         full += evt.delta.text;
         if (onChunk) onChunk(full);
+      } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
+        stopReason = evt.delta.stop_reason;
       } else if (evt.type === 'error' && evt.error) {
         throw new Error(evt.error.message || 'Streamingfout');
       }
     });
-    return full.trim() || '(leeg antwoord)';
+    return { text: full, truncated: stopReason === 'max_tokens' };
   }
 
   async function callOpenAI(node, history, url, opts, onChunk){
@@ -2954,14 +2978,16 @@
       throw new Error(parseErrMsg(bodyText, res.status));
     }
     let full = '';
+    let finishReason = null;
     await streamSSE(res, (evt) => {
       const delta = evt.choices?.[0]?.delta?.content;
       if (typeof delta === 'string' && delta) {
         full += delta;
         if (onChunk) onChunk(full);
       }
+      if (evt.choices?.[0]?.finish_reason) finishReason = evt.choices[0].finish_reason;
     });
-    return full.trim() || '(leeg antwoord)';
+    return { text: full, truncated: finishReason === 'length' };
   }
 
   async function callGoogle(node, history, opts, onChunk){
@@ -2988,6 +3014,7 @@
       throw new Error(parseErrMsg(bodyText, res.status));
     }
     let full = '';
+    let finishReason = null;
     await streamSSE(res, (evt) => {
       const parts = evt.candidates?.[0]?.content?.parts || [];
       const deltaText = parts.map(p => p.text || '').join('');
@@ -2995,8 +3022,9 @@
         full += deltaText;
         if (onChunk) onChunk(full);
       }
+      if (evt.candidates?.[0]?.finishReason) finishReason = evt.candidates[0].finishReason;
     });
-    return full.trim() || '(leeg antwoord)';
+    return { text: full, truncated: finishReason === 'MAX_TOKENS' };
   }
 
   function parseErrMsg(bodyText, status){
@@ -3254,7 +3282,7 @@
         'Gebruik BIJWERKEN als dit aanvult op een bestaand item (zelfde TITEL als hierboven in de lijst), NIEUW voor een nieuw onderwerp, of anders gewoon "ACTIE: GEEN" (en verder niets).';
 
       const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
-      const text = (raw || '').trim();
+      const text = (raw.text || '').trim();
 
       const actieMatch = /ACTIE:\s*(BIJWERKEN|NIEUW|GEEN)/i.exec(text);
       const actie = actieMatch ? actieMatch[1].toUpperCase() : 'GEEN';
@@ -3344,7 +3372,7 @@
         'Regels: wil de gebruiker iets verwijderen, laat dat item dan gewoon weg uit de teruggegeven lijst. Wil de gebruiker iets aanpassen, wijzig dan title/content maar behoud hetzelfde id. Nieuw item: id op null. Items die niet door de instructie geraakt worden, geef je ongewijzigd terug (zelfde id/category/title/content) — verzin niets nieuws bij wat je toch al teruggeeft.';
 
       const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
-      let jsonText = (raw || '').trim()
+      let jsonText = (raw.text || '').trim()
         .replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '').trim();
       const start = jsonText.indexOf('[');
       const end = jsonText.lastIndexOf(']');
