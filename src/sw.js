@@ -5,7 +5,7 @@
 // ook een harde vereiste van Chrome/Android om de installatie-prompt
 // (beforeinstallprompt) te tonen.
 
-const CACHE_NAME = 'relay-shell-v1';
+const CACHE_NAME = 'relay-shell-v2';
 const SHELL_FILES = [
   '/',
   '/manifest.json',
@@ -37,16 +37,17 @@ self.addEventListener('fetch', (event) => {
   // altijd live en actueel zijn.
   if (req.method !== 'GET' || req.url.includes('/api/')) return;
 
+  // Netwerk-eerst, niet cache-eerst: anders blijft iedereen na een update
+  // vastzitten aan een verouderde versie van de app totdat de cache om
+  // een andere reden verloopt. Alleen als het netwerk écht niet bereikbaar
+  // is (offline), valt dit terug op wat er nog in de cache staat.
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const network = fetch(req).then((res) => {
-        if (res && res.ok && req.url.startsWith(self.location.origin)) {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
-        }
-        return res;
-      }).catch(() => cached); // offline: terugvallen op cache
-      return cached || network;
-    })
+    fetch(req).then((res) => {
+      if (res && res.ok && req.url.startsWith(self.location.origin)) {
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
+      }
+      return res;
+    }).catch(() => caches.match(req))
   );
 });
