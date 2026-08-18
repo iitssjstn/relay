@@ -337,6 +337,66 @@ app.put('/api/github-token', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- E2B (code laten draaien in een externe, geïsoleerde sandbox) ----------
+
+app.get('/api/e2b-token', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT e2b_api_key FROM users WHERE id = ?').get(req.user.uid);
+  res.json({ hasToken: !!(row && row.e2b_api_key) });
+});
+
+app.put('/api/e2b-token', requireAuth, (req, res) => {
+  const { token } = req.body || {};
+  db.prepare('UPDATE users SET e2b_api_key = ? WHERE id = ?').run(token || null, req.user.uid);
+  res.json({ ok: true });
+});
+
+// Talen die E2B's code-interpreter native ondersteunt. Andere bestands-
+// talen (bv. yaml, html) zijn geen "uitvoerbare taal" en komen dus niet in
+// aanmerking voor de uitvoer-knop aan de voorkant.
+const E2B_LANGUAGES = ['python', 'javascript', 'typescript', 'r', 'java', 'bash'];
+const EXECUTE_TIMEOUT_MS = 45000; // ruim genoeg voor een script, geen langlopende dienst
+
+app.post('/api/execute', requireAuth, async (req, res) => {
+  const { language, content } = req.body || {};
+  if (!language || !E2B_LANGUAGES.includes(language)) {
+    return res.status(400).json({ error: 'Deze taal wordt niet ondersteund voor uitvoering.' });
+  }
+  if (typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ error: 'Geen code om uit te voeren.' });
+  }
+  const row = db.prepare('SELECT e2b_api_key FROM users WHERE id = ?').get(req.user.uid);
+  const apiKey = row && row.e2b_api_key;
+  if (!apiKey) {
+    return res.status(400).json({ error: 'Nog geen E2B API-key ingesteld. Voeg die eerst toe via het accountmenu.' });
+  }
+
+  let sandbox = null;
+  const timer = setTimeout(() => {
+    // Vangnet: mocht E2B zelf onverhoopt blijven hangen, sluit de sandbox
+    // en het verzoek toch netjes af in plaats van de gebruiker eindeloos
+    // te laten wachten.
+    if (sandbox) sandbox.kill().catch(() => {});
+  }, EXECUTE_TIMEOUT_MS);
+
+  try {
+    const { Sandbox } = require('@e2b/code-interpreter');
+    sandbox = await Sandbox.create({ apiKey, timeoutMs: EXECUTE_TIMEOUT_MS });
+    const execution = await sandbox.runCode(content, { language });
+    res.json({
+      stdout: (execution.logs && execution.logs.stdout || []).join('\n'),
+      stderr: (execution.logs && execution.logs.stderr || []).join('\n'),
+      error: execution.error ? (execution.error.name + ': ' + execution.error.value) : null,
+      results: (execution.results || []).map(r => r.text).filter(Boolean)
+    });
+  } catch (e) {
+    const msg = /api ?key/i.test(e.message || '') ? 'Ongeldige E2B API-key.' : ('Uitvoering mislukt: ' + e.message);
+    res.status(502).json({ error: msg });
+  } finally {
+    clearTimeout(timer);
+    if (sandbox) sandbox.kill().catch(() => {});
+  }
+});
+
 app.post('/api/github/fetch', requireAuth, async (req, res) => {
   const { url } = req.body || {};
   const row = db.prepare('SELECT github_token FROM users WHERE id = ?').get(req.user.uid);

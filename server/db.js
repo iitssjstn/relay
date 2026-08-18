@@ -65,6 +65,9 @@ if (!userColumns.includes('github_token')) {
 if (!userColumns.includes('memory_auto_update')) {
   db.exec("ALTER TABLE users ADD COLUMN memory_auto_update INTEGER NOT NULL DEFAULT 1");
 }
+if (!userColumns.includes('e2b_api_key')) {
+  db.exec("ALTER TABLE users ADD COLUMN e2b_api_key TEXT");
+}
 
 // Eenmalige migratie: bestaande (oude, ongestructureerde) geheugentekst
 // overzetten naar één topic-item, zodat niemand data kwijtraakt bij de

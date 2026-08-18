@@ -116,6 +116,26 @@
     flex:1; min-height:0; width:100%; border:none;
     background:#fff;
   }
+  .artifact-run-output{
+    flex-shrink:0; max-height:45%; overflow-y:auto;
+    border-top: 1px solid var(--border-soft);
+    padding: 10px 16px; background: var(--bg);
+  }
+  .artifact-run-output-label{
+    font-family: var(--font-mono); text-transform:uppercase; font-size:10px;
+    letter-spacing:0.06em; color: var(--text-faint); margin-bottom:6px;
+    display:flex; align-items:center; gap:7px;
+  }
+  .artifact-run-output pre{
+    margin:0; font-family: var(--font-mono); font-size:12px; line-height:1.55;
+    white-space:pre-wrap; word-break:break-word; color: var(--text-dim);
+  }
+  .artifact-run-output pre.stderr{ color: var(--danger); }
+  .artifact-run-spinner{
+    width:11px; height:11px; border-radius:50%; flex-shrink:0;
+    border: 1.5px solid var(--border); border-top-color: var(--text-faint);
+    animation: thinking-spin 0.8s linear infinite;
+  }
 
   @media (max-width: 860px){
     .artifact-panel{
@@ -934,6 +954,39 @@
   }
   .field input:focus, .field select:focus{ border-color: var(--amber); }
   .field-hint{ font-size:11px; color: var(--text-faint); margin-top:5px; line-height:1.4; }
+  .checkbox-label{
+    display:flex; align-items:center; gap:8px;
+    font-size:13px; color: var(--text-dim); cursor:pointer;
+  }
+  .checkbox-label input[type="checkbox"]{ width:15px; height:15px; accent-color: var(--amber); cursor:pointer; }
+
+  .thinking-block{ margin-bottom:8px; }
+  .thinking-toggle{
+    display:flex; align-items:center; gap:7px;
+    background:none; border:none; padding:2px 0;
+    font-size:12px; color: var(--text-faint); font-style:italic;
+  }
+  .thinking-block.done .thinking-toggle{ cursor:pointer; }
+  .thinking-block.done .thinking-toggle:hover{ color: var(--text-dim); }
+  .thinking-spinner{
+    width:11px; height:11px; border-radius:50%; flex-shrink:0;
+    border: 1.5px solid var(--border); border-top-color: var(--text-faint);
+    animation: thinking-spin 0.8s linear infinite;
+  }
+  @keyframes thinking-spin{ to{ transform: rotate(360deg); } }
+  .thinking-chevron{
+    display:none; font-size:9px; transition: transform .15s ease;
+  }
+  .thinking-block.done .thinking-chevron{ display:inline-block; }
+  .thinking-block.open .thinking-chevron{ transform: rotate(90deg); }
+  .thinking-body{
+    display:none; margin-top:6px; padding: 8px 11px;
+    border-left: 2px solid var(--border-soft);
+    font-size:12px; font-style:italic; color: var(--text-faint);
+    line-height:1.5; white-space:pre-wrap; max-height:240px; overflow-y:auto;
+  }
+  .thinking-block.open .thinking-body{ display:block; }
+
   .key-row{ display:flex; gap:6px; }
   .key-row input{ flex:1; }
   .key-row button{
@@ -1059,6 +1112,7 @@
   <div class="account-popup" id="accountPopup" style="display:none;">
     <button class="account-popup-item" id="memoryBtn">Geheugen</button>
     <button class="account-popup-item" id="githubTokenBtn">GitHub</button>
+    <button class="account-popup-item" id="e2bTokenBtn">E2B (sandbox)</button>
     <button class="account-popup-item" id="adminBtn" style="display:none;">Beheer</button>
     <div class="account-popup-divider"></div>
     <button class="account-popup-item danger" id="logoutBtn">↪ Uitloggen</button>
@@ -1112,6 +1166,7 @@
           <button type="button" class="artifact-view-btn active" id="artifactViewCodeBtn">Code</button>
           <button type="button" class="artifact-view-btn" id="artifactViewPreviewBtn">Voorbeeld</button>
         </span>
+        <button type="button" class="code-file-btn" id="artifactRunBtn" style="display:none;">▸ uitvoeren</button>
         <button type="button" class="code-file-btn" id="artifactPanelCopyBtn">kopieer</button>
         <button type="button" class="code-file-btn" id="artifactPanelDownloadBtn">↓ download</button>
         <button type="button" class="artifact-panel-close" id="artifactPanelCloseBtn" title="Sluiten">✕</button>
@@ -1119,6 +1174,7 @@
     </div>
     <pre class="artifact-panel-body" id="artifactCodeView"><code id="artifactPanelCode"></code></pre>
     <iframe class="artifact-preview-frame" id="artifactPreviewFrame" style="display:none;" sandbox="allow-scripts" title="Voorbeeld"></iframe>
+    <div class="artifact-run-output" id="artifactRunOutput" style="display:none;"></div>
   </aside>
 </div>
 
@@ -1172,6 +1228,14 @@
         <label>Max antwoordlengte</label>
         <input id="fMaxOutput" type="number" placeholder="bv. 4096">
       </div>
+    </div>
+
+    <div class="field" id="fThinkingWrap" style="display:none;">
+      <label class="checkbox-label">
+        <input id="fExtendedThinking" type="checkbox">
+        Extended thinking (Anthropic)
+      </label>
+      <div class="field-hint">Toont het redeneerproces van het model als inklapbaar "Nagedacht voor Xs"-blokje boven het antwoord. Werkt alleen bij Claude-modellen die dit ondersteunen (bv. Claude 4-serie), en kost extra tokens/tijd.</div>
     </div>
 
     <div class="copyright-note">
@@ -1265,6 +1329,31 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="e2bTokenOverlay" style="display:none;">
+  <div class="modal" style="max-width:440px;">
+    <h2>E2B (sandbox)</h2>
+    <div class="modal-sub">Nodig om de "Uitvoeren"-knop bij code te gebruiken: laat een AI-gegenereerd script écht draaien, in een geïsoleerde omgeving bij E2B — niet op deze server. Gratis account met startsaldo op <a href="https://e2b.dev" target="_blank" rel="noopener">e2b.dev</a>.</div>
+
+    <div id="e2bTokenStatus" class="field-hint" style="margin-top:0; margin-bottom:12px;"></div>
+
+    <div class="field">
+      <label>API-key</label>
+      <div class="key-row">
+        <input id="e2bTokenInput" type="password" placeholder="e2b_...">
+        <button type="button" id="e2bTokenToggleBtn">toon</button>
+      </div>
+      <div class="field-hint">Te vinden op e2b.dev onder Dashboard → API Keys, na het aanmaken van een (gratis) account.</div>
+    </div>
+
+    <div id="e2bTokenMsg" style="display:none; font-size:11.5px; margin-top:4px; margin-bottom:6px; line-height:1.4;"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="e2bTokenCloseBtn">Sluiten</button>
+      <button class="btn btn-primary" id="e2bTokenSaveBtn">Opslaan</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="adminOverlay" style="display:none;">
   <div class="modal" style="max-width:440px;">
     <h2>Beheer toegang</h2>
@@ -1333,7 +1422,7 @@
   // los van het persoonlijke geheugen — zodat gegenereerde bestanden
   // consequent en herkenbaar benoemd worden, en losse voorbeeldcommando's
   // niet per ongeluk als "bestand" worden behandeld.
-  const FILE_FORMAT_INSTRUCTION = "Als je bestanden voor een project of script maakt: zet de volledige bestandsnaam (incl. pad, bv. src/app.py) als eigen regel direct vóór het codeblok, zonder sterretjes of andere opmaak eromheen. Gebruik codeblokken alleen voor bestanden die je daadwerkelijk voorstelt om aan te maken — niet voor losse voorbeeldcommando's, terminalinvoer of illustraties; die kun je gewoon als normale lopende tekst beschrijven.";
+  const FILE_FORMAT_INSTRUCTION = "Als je bestanden voor een project of script maakt, gebruik dan ALTIJD dit exacte formaat — de volledige bestandsnaam (incl. pad) als eigen regel, direct vóór het codeblok, zonder sterretjes of andere opmaak eromheen, en met een taalaanduiding na de backticks die bij het bestandstype past:\n\nsrc/app.py\n```python\n...inhoud...\n```\n\nDit geldt voor ELK bestand dat je voorstelt, ook bij meerdere bestanden in één antwoord — sla deze naamregel nooit over, ook niet als de bestandsnaam al ergens anders in je tekst genoemd werd. Gebruik codeblokken zonder taalaanduiding (of met alleen \"txt\") alleen voor losse voorbeeldcommando's, terminaloutput of illustraties die geen aan te maken bestand zijn — die worden namelijk niet als bestand behandeld.";
 
   function buildSystemText(){
     const parts = [FILE_FORMAT_INSTRUCTION];
@@ -1680,6 +1769,47 @@
       msgEl.style.color = 'var(--relay-green)'; msgEl.style.display = 'block';
       $('githubTokenInput').value = '';
       $('githubTokenStatus').textContent = token ? 'Er staat een token ingesteld.' : 'Nog geen token ingesteld.';
+    } catch (e) {
+      msgEl.textContent = 'Opslaan mislukt: ' + e.message;
+      msgEl.style.color = 'var(--danger)'; msgEl.style.display = 'block';
+    }
+  });
+
+  // ---------- E2B-tokenscherm (zelfde patroon als GitHub hierboven) ----------
+
+  const e2bTokenOverlay = $('e2bTokenOverlay');
+  async function openE2BTokenModal(){
+    $('e2bTokenInput').value = '';
+    $('e2bTokenInput').type = 'password';
+    $('e2bTokenToggleBtn').textContent = 'toon';
+    $('e2bTokenMsg').style.display = 'none';
+    e2bTokenOverlay.style.display = 'flex';
+    try {
+      const data = await apiFetch('/api/e2b-token');
+      $('e2bTokenStatus').textContent = data.hasToken
+        ? "Er is al een API-key ingesteld. Vul hieronder een nieuwe in om die te vervangen, of laat leeg en klik op Opslaan om 'm te verwijderen."
+        : 'Nog geen API-key ingesteld — de "Uitvoeren"-knop bij code werkt hier pas na.';
+    } catch (e) { $('e2bTokenStatus').textContent = 'Kon status niet ophalen.'; }
+  }
+  function closeE2BTokenModal(){ e2bTokenOverlay.style.display = 'none'; }
+
+  $('e2bTokenBtn').addEventListener('click', openE2BTokenModal);
+  $('e2bTokenCloseBtn').addEventListener('click', closeE2BTokenModal);
+  e2bTokenOverlay.addEventListener('click', (e) => { if (e.target === e2bTokenOverlay) closeE2BTokenModal(); });
+  $('e2bTokenToggleBtn').addEventListener('click', () => {
+    const f = $('e2bTokenInput');
+    f.type = f.type === 'password' ? 'text' : 'password';
+    $('e2bTokenToggleBtn').textContent = f.type === 'password' ? 'toon' : 'verberg';
+  });
+  $('e2bTokenSaveBtn').addEventListener('click', async () => {
+    const token = $('e2bTokenInput').value.trim();
+    const msgEl = $('e2bTokenMsg');
+    try {
+      await apiFetch('/api/e2b-token', { method: 'PUT', body: { token } });
+      msgEl.textContent = token ? 'API-key opgeslagen.' : 'API-key verwijderd.';
+      msgEl.style.color = 'var(--relay-green)'; msgEl.style.display = 'block';
+      $('e2bTokenInput').value = '';
+      $('e2bTokenStatus').textContent = token ? 'Er staat een API-key ingesteld.' : 'Nog geen API-key ingesteld.';
     } catch (e) {
       msgEl.textContent = 'Opslaan mislukt: ' + e.message;
       msgEl.style.color = 'var(--danger)'; msgEl.style.display = 'block';
@@ -2151,6 +2281,19 @@
     return /\.html?$/i.test(filename || '');
   }
 
+  // Herkent op basis van de bestandsextensie welke E2B-taal dit is, voor
+  // de "Uitvoeren"-knop. Bestandstypen die niet in deze lijst staan (bv.
+  // yaml, html, json) krijgen simpelweg geen uitvoerknop — dat zijn geen
+  // scripts om te "draaien".
+  const RUNNABLE_EXT_TO_LANG = {
+    py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    ts: 'typescript', r: 'r', java: 'java', sh: 'bash', bash: 'bash'
+  };
+  function runnableLanguageFor(filename){
+    const m = /\.([a-z0-9]+)$/i.exec(filename || '');
+    return m ? (RUNNABLE_EXT_TO_LANG[m[1].toLowerCase()] || null) : null;
+  }
+
   function setArtifactView(mode){
     const isPreview = mode === 'preview';
     $('artifactViewCodeBtn').classList.toggle('active', !isPreview);
@@ -2172,6 +2315,12 @@
     $('artifactPanelCode').textContent = content;
     appRoot.classList.add('artifact-open');
     if (isMobileDevice()) closeMobileSidebar();
+    $('artifactRunOutput').style.display = 'none';
+    $('artifactRunOutput').innerHTML = '';
+
+    const runLang = runnableLanguageFor(filename);
+    $('artifactRunBtn').style.display = runLang ? 'inline-flex' : 'none';
+    $('artifactRunBtn').dataset.lang = runLang || '';
 
     if (isPreviewableFilename(filename)) {
       artifactViewToggle.style.display = 'flex';
@@ -2188,6 +2337,40 @@
   }
   $('artifactViewCodeBtn').addEventListener('click', () => setArtifactView('code'));
   $('artifactViewPreviewBtn').addEventListener('click', () => setArtifactView('preview'));
+
+  // Code écht laten draaien — via E2B, in een geïsoleerde sandbox ver van
+  // deze server. Toont stdout/stderr (en eventuele rijke output, zoals
+  // een berekend getal of een Jupyter-achtig resultaat) in het paneel.
+  $('artifactRunBtn').addEventListener('click', async () => {
+    if (!currentArtifact) return;
+    const lang = $('artifactRunBtn').dataset.lang;
+    const outEl = $('artifactRunOutput');
+    const btn = $('artifactRunBtn');
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.innerHTML = '<span class="artifact-run-spinner"></span> bezig...';
+    outEl.style.display = 'block';
+    outEl.innerHTML = '<div class="artifact-run-output-label">Uitvoeren...</div>';
+    if (autoScrollToBottom) { /* niet relevant hier, het paneel scrolt op zichzelf */ }
+    try {
+      const result = await apiFetch('/api/execute', { method: 'POST', body: { language: lang, content: currentArtifact.content } });
+      let html = '<div class="artifact-run-output-label">Uitvoer</div>';
+      if (result.stdout) html += '<pre>' + escapeHtml(result.stdout) + '</pre>';
+      if (result.results && result.results.length) html += '<pre>' + escapeHtml(result.results.join('\n')) + '</pre>';
+      if (result.stderr) html += '<pre class="stderr">' + escapeHtml(result.stderr) + '</pre>';
+      if (result.error) html += '<pre class="stderr">' + escapeHtml(result.error) + '</pre>';
+      if (!result.stdout && !result.stderr && !result.error && !(result.results && result.results.length)) {
+        html += '<pre>(geen uitvoer)</pre>';
+      }
+      outEl.innerHTML = html;
+    } catch (e) {
+      outEl.innerHTML = '<div class="artifact-run-output-label">Uitvoeren mislukt</div><pre class="stderr">' + escapeHtml(e.message) + '</pre>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  });
+
   $('artifactPanelCloseBtn').addEventListener('click', closeArtifactPanel);
   $('artifactPanelCopyBtn').addEventListener('click', async (e) => {
     if (!currentArtifact) return;
@@ -2225,6 +2408,15 @@
             .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
           if (slug) return slug + '.' + ext;
         }
+      }
+    }
+
+    // JSON met een "name"-veld (zoals package.json) — de meest gangbare
+    // en herkenbare naam voor dit soort bestanden.
+    if (lang === 'json') {
+      const m = /"name"\s*:\s*"([^"]{1,60})"/.exec(rawCode);
+      if (m) {
+        if (/^[\w@/.\-]+$/.test(m[1])) return 'package.json';
       }
     }
     return null;
@@ -2265,12 +2457,13 @@
       // het geval de naam een regeltje eerder staat (bv. als koptekst met
       // een lege regel of korte toelichting ertussen).
       let filename = null;
+      let filenameLabelEl = null;
       let sib = preEl.previousElementSibling;
       for (let hops = 0; hops < 3 && sib && !filename; hops++) {
         const t = sib.textContent.trim();
         if (t.length > 0 && t.length < 80) {
           const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
-          if (m) filename = m[1];
+          if (m) { filename = m[1]; filenameLabelEl = sib; }
         }
         // Stop bij een ander codeblok of een duidelijk langere alinea —
         // dan zijn we voorbij de context van dít blok.
@@ -2284,6 +2477,14 @@
       // gewoon codeblok ter plekke staan, zonder nep-bestandsnaam.
       const lineCount = rawCode.split('\n').filter(l => l.trim() !== '').length;
       if (!filename && lineCount <= 3) return;
+
+      // Geen bestandsnaam gevonden, én ook geen herkenbare programmeer-/
+      // configuratietaal opgegeven (dus geen taal, of gewoon "txt"/
+      // "text"/"plaintext")? Dan behandelen we dit niet als een bestand —
+      // dat leidde eerder tot een kaartje voor iedere losse ongelabelde
+      // tekstblok, wat bij een echt project alleen maar ruis toevoegt.
+      const NON_FILE_LANGS = ['', 'txt', 'text', 'plaintext', 'plain', 'output', 'console'];
+      if (!filename && NON_FILE_LANGS.includes(lang)) return;
 
       if (!filename) {
         const ext = CODE_EXT_MAP[lang] || lang || 'txt';
@@ -2316,8 +2517,12 @@
       card.addEventListener('click', () => showArtifact(filename, rawCode));
 
       // Niet ter plekke invoegen — gewoon weghalen uit de tekst, en
-      // verzamelen om straks samen onderaan het bericht te tonen.
+      // verzamelen om straks samen onderaan het bericht te tonen. Het
+      // label-tekstregeltje waar de naam vandaan kwam (bv. "deploy.sh")
+      // ook meteen verwijderen — anders blijft het als wees achter en kan
+      // een vólgend, naamloos blok die naam per ongeluk overnemen.
       preEl.remove();
+      if (filenameLabelEl) filenameLabelEl.remove();
       chips.push(card);
       filesInMessage.push({ path: filename, content: rawCode });
     });
@@ -2444,6 +2649,14 @@
       <div class="avatar">${providerName.slice(0,2).toUpperCase()}</div>
       <div>
         <div class="msg-meta">${escapeHtml(providerName)}</div>
+        <div class="thinking-block" id="think-${Math.random().toString(36).slice(2,9)}" style="display:none;">
+          <button type="button" class="thinking-toggle">
+            <span class="thinking-spinner"></span>
+            <span class="thinking-label">Aan het nadenken...</span>
+            <span class="thinking-chevron">▸</span>
+          </button>
+          <div class="thinking-body"><div class="thinking-text"></div></div>
+        </div>
         <div class="bubble streaming-plain"><span class="stream-text"><span class="typing"><span></span><span></span><span></span></span></span><span class="stream-cursor"></span></div>
       </div>
     `;
@@ -2451,6 +2664,16 @@
     if (autoScrollToBottom) scrollMessagesToBottom();
     const bubbleEl = wrap.querySelector('.bubble');
     const textEl = bubbleEl.querySelector('.stream-text');
+    const thinkBlock = wrap.querySelector('.thinking-block');
+    const thinkLabel = wrap.querySelector('.thinking-label');
+    const thinkText = wrap.querySelector('.thinking-text');
+    const thinkToggle = wrap.querySelector('.thinking-toggle');
+    let thinkingStartedAt = null;
+    let thinkingOpen = false;
+    thinkToggle.addEventListener('click', () => {
+      thinkingOpen = !thinkingOpen;
+      thinkBlock.classList.toggle('open', thinkingOpen);
+    });
 
     // Tijdens het typen tonen we platte tekst — snel, geen markdown-parse
     // nodig per fragment, precies zoals voordat er opmaak bijkwam. Pas als
@@ -2473,11 +2696,32 @@
     return {
       wrap,
       update(text){
+        // Eerste stukje echte antwoordtekst dat binnenkomt betekent dat
+        // het denken voorbij is (bij Anthropic komt het denk-blok altijd
+        // vóór de tekst) — klap dan automatisch in tot de samenvatting.
+        if (thinkingStartedAt && !thinkBlock.classList.contains('done')) {
+          const seconds = Math.max(1, Math.round((Date.now() - thinkingStartedAt) / 1000));
+          thinkLabel.textContent = 'Nagedacht voor ' + seconds + 's';
+          thinkBlock.querySelector('.thinking-spinner').style.display = 'none';
+          thinkBlock.classList.add('done');
+        }
         pendingText = text;
         if (!frameScheduled) {
           frameScheduled = true;
           requestAnimationFrame(flush);
         }
+      },
+      // Wordt bij elk denk-fragment aangeroepen (alleen bij Anthropic met
+      // extended thinking aan). Toont de denktekst live terwijl 'ie
+      // binnenkomt; zodra het echte antwoord begint, klapt dit vanzelf in
+      // tot een "Nagedacht voor Xs"-samenvatting (zie update() hierboven).
+      updateThinking(text){
+        if (!thinkingStartedAt) {
+          thinkingStartedAt = Date.now();
+          thinkBlock.style.display = 'block';
+        }
+        thinkText.textContent = text;
+        if (autoScrollToBottom) scrollMessagesToBottom();
       },
       finish(text){
         pendingText = null;
@@ -2506,6 +2750,7 @@
     $('toggleKeyBtn').textContent = 'toon';
     $('fMaxTokens').value = node ? node.maxTokens : PROVIDER_DEFAULTS['anthropic'].maxTokens;
     $('fMaxOutput').value = node ? node.maxOutput : PROVIDER_DEFAULTS['anthropic'].maxOutput;
+    $('fExtendedThinking').checked = node ? !!node.extendedThinking : false;
     $('modalDeleteBtn').style.display = node ? 'block' : 'none';
     updateProviderHint();
     $('modalOverlay').style.display = 'flex';
@@ -2522,6 +2767,7 @@
     const d = PROVIDER_DEFAULTS[p];
     $('providerHint').textContent = d.hint;
     $('fBaseUrlWrap').style.display = p === 'custom' ? 'block' : 'none';
+    $('fThinkingWrap').style.display = p === 'anthropic' ? 'block' : 'none';
     if (!editingId) {
       $('fModel').value = d.model;
       $('fMaxTokens').value = d.maxTokens;
@@ -2548,6 +2794,7 @@
     const baseUrl = $('fBaseUrl').value.trim();
     const maxTokens = parseInt($('fMaxTokens').value, 10) || PROVIDER_DEFAULTS[provider].maxTokens;
     const maxOutput = parseInt($('fMaxOutput').value, 10) || PROVIDER_DEFAULTS[provider].maxOutput;
+    const extendedThinking = provider === 'anthropic' && $('fExtendedThinking').checked;
 
     if (!model) { $('fModel').focus(); return; }
     if (!apiKey) { $('fKey').focus(); return; }
@@ -2555,9 +2802,9 @@
 
     if (editingId) {
       const node = nodes.find(n => n.id === editingId);
-      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput });
+      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking });
     } else {
-      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, status: 'queued' });
+      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, status: 'queued' });
       if (activeIndex === -1) activeIndex = 0;
     }
     saveNodes();
@@ -2731,7 +2978,10 @@
           const historyForThisCall = accumulated
             ? [...conversation, { role: 'assistant', content: accumulated }]
             : conversation;
-          const result = await callProvider(node, historyForThisCall, { signal: currentAbortController.signal }, (partial) => {
+          const result = await callProvider(node, historyForThisCall, {
+            signal: currentAbortController.signal,
+            onThinkingChunk: (partial) => streamHandle.updateThinking(partial)
+          }, (partial) => {
             partialSoFar = accumulated + partial;
             streamHandle.update(partialSoFar);
           });
@@ -2984,6 +3234,14 @@
       stream: true
     };
     if (opts.injectMemory !== false) body.system = buildSystemText();
+    if (node.extendedThinking) {
+      // budget moet ruim onder max_tokens blijven (Anthropic-eis: minimaal
+      // 1024, en de uiteindelijke tekst heeft ook nog eigen ruimte nodig).
+      const cap = node.maxOutput || 4096;
+      const budget = Math.max(1024, Math.min(10000, Math.floor(cap * 0.6)));
+      body.thinking = { type: 'enabled', budget_tokens: budget };
+      body.max_tokens = Math.max(cap, budget + 1024);
+    }
     const res = await proxyFetch('https://api.anthropic.com/v1/messages', {
       'Content-Type': 'application/json',
       'x-api-key': node.apiKey,
@@ -3003,18 +3261,24 @@
       throw new Error(parseErrMsg(bodyText, res.status));
     }
     let full = '';
+    let thinkingFull = '';
     let stopReason = null;
     await streamSSE(res, (evt) => {
-      if (evt.type === 'content_block_delta' && evt.delta && typeof evt.delta.text === 'string') {
-        full += evt.delta.text;
-        if (onChunk) onChunk(full);
+      if (evt.type === 'content_block_delta' && evt.delta) {
+        if (evt.delta.type === 'thinking_delta' && typeof evt.delta.thinking === 'string') {
+          thinkingFull += evt.delta.thinking;
+          if (opts.onThinkingChunk) opts.onThinkingChunk(thinkingFull);
+        } else if (typeof evt.delta.text === 'string') {
+          full += evt.delta.text;
+          if (onChunk) onChunk(full);
+        }
       } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
         stopReason = evt.delta.stop_reason;
       } else if (evt.type === 'error' && evt.error) {
         throw new Error(evt.error.message || 'Streamingfout');
       }
     });
-    return { text: full, truncated: stopReason === 'max_tokens' };
+    return { text: full, thinking: thinkingFull, truncated: stopReason === 'max_tokens' };
   }
 
   async function callOpenAI(node, history, url, opts, onChunk){
