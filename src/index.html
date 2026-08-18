@@ -103,6 +103,19 @@
     font-family: var(--font-mono); font-size:12.5px; line-height:1.6; color: var(--text-dim);
     white-space:pre;
   }
+  .artifact-panel-viewtoggle{
+    display:flex; background: var(--bg); border:1px solid var(--border);
+    border-radius:7px; padding:2px; margin-right:4px;
+  }
+  .artifact-view-btn{
+    background:none; border:none; color: var(--text-faint);
+    font-size:11px; padding:4px 9px; border-radius:5px;
+  }
+  .artifact-view-btn.active{ background: var(--panel-2); color: var(--text); }
+  .artifact-preview-frame{
+    flex:1; min-height:0; width:100%; border:none;
+    background:#fff;
+  }
 
   @media (max-width: 860px){
     .artifact-panel{
@@ -1079,12 +1092,17 @@
     <div class="artifact-panel-header">
       <span class="artifact-panel-name" id="artifactPanelName"></span>
       <div class="artifact-panel-actions">
+        <span class="artifact-panel-viewtoggle" id="artifactViewToggle" style="display:none;">
+          <button type="button" class="artifact-view-btn active" id="artifactViewCodeBtn">Code</button>
+          <button type="button" class="artifact-view-btn" id="artifactViewPreviewBtn">Voorbeeld</button>
+        </span>
         <button type="button" class="code-file-btn" id="artifactPanelCopyBtn">kopieer</button>
         <button type="button" class="code-file-btn" id="artifactPanelDownloadBtn">↓ download</button>
         <button type="button" class="artifact-panel-close" id="artifactPanelCloseBtn" title="Sluiten">✕</button>
       </div>
     </div>
-    <pre class="artifact-panel-body"><code id="artifactPanelCode"></code></pre>
+    <pre class="artifact-panel-body" id="artifactCodeView"><code id="artifactPanelCode"></code></pre>
+    <iframe class="artifact-preview-frame" id="artifactPreviewFrame" style="display:none;" sandbox="allow-scripts" title="Voorbeeld"></iframe>
   </aside>
 </div>
 
@@ -2026,7 +2044,29 @@
   // ---------- Zijpaneel voor code-bestanden (net als bij Claude zelf) ----------
 
   const artifactPanel = $('artifactPanel');
+  const artifactCodeView = $('artifactCodeView');
+  const artifactPreviewFrame = $('artifactPreviewFrame');
+  const artifactViewToggle = $('artifactViewToggle');
   let currentArtifact = null;
+
+  function isPreviewableFilename(filename){
+    return /\.html?$/i.test(filename || '');
+  }
+
+  function setArtifactView(mode){
+    const isPreview = mode === 'preview';
+    $('artifactViewCodeBtn').classList.toggle('active', !isPreview);
+    $('artifactViewPreviewBtn').classList.toggle('active', isPreview);
+    artifactCodeView.style.display = isPreview ? 'none' : 'block';
+    artifactPreviewFrame.style.display = isPreview ? 'block' : 'none';
+    if (isPreview && currentArtifact) {
+      // sandbox="allow-scripts" zonder allow-same-origin: de voorvertoning
+      // draait volledig geïsoleerd — geen toegang tot Relay zelf, geen
+      // cookies, geen netwerk naar je eigen server. Puur wat de browser
+      // zelf al met een normale webpagina zou doen.
+      artifactPreviewFrame.srcdoc = currentArtifact.content;
+    }
+  }
 
   function showArtifact(filename, content){
     currentArtifact = { filename, content };
@@ -2034,11 +2074,22 @@
     $('artifactPanelCode').textContent = content;
     appRoot.classList.add('artifact-open');
     if (isMobileDevice()) closeMobileSidebar();
+
+    if (isPreviewableFilename(filename)) {
+      artifactViewToggle.style.display = 'flex';
+      setArtifactView('preview');
+    } else {
+      artifactViewToggle.style.display = 'none';
+      setArtifactView('code');
+    }
   }
   function closeArtifactPanel(){
     appRoot.classList.remove('artifact-open');
     currentArtifact = null;
+    artifactPreviewFrame.srcdoc = '';
   }
+  $('artifactViewCodeBtn').addEventListener('click', () => setArtifactView('code'));
+  $('artifactViewPreviewBtn').addEventListener('click', () => setArtifactView('preview'));
   $('artifactPanelCloseBtn').addEventListener('click', closeArtifactPanel);
   $('artifactPanelCopyBtn').addEventListener('click', async (e) => {
     if (!currentArtifact) return;
