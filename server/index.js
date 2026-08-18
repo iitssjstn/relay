@@ -601,6 +601,17 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'src', 'index.html'));
 });
 
+// Vangt elke onverwachte serverfout op (bv. een databasetabel die nog
+// ontbreekt door een niet-volledig doorgevoerde update) en geeft een
+// duidelijke, leesbare JSON-foutmelding terug in plaats van een kale
+// 500-crash — belangrijk voor `/api/...`-routes, die de frontend anders
+// niet netjes kan tonen. Moet als allerlaatste middleware staan.
+app.use((err, req, res, next) => {
+  console.error('Onverwachte serverfout bij', req.method, req.path, ':', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Interne serverfout: ' + (err && err.message ? err.message : 'onbekend') });
+});
+
 app.listen(PORT, () => {
   console.log(`Relay-server luistert op poort ${PORT}`);
 });

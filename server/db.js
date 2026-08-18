@@ -39,6 +39,18 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+
+  -- Gestructureerd geheugen, net als bij Claude zelf: losse, benoemde
+  -- stukjes (Profiel/Topics/Areas) i.p.v. één grote lap tekst.
+  CREATE TABLE IF NOT EXISTS memory_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category TEXT NOT NULL DEFAULT 'topic',
+    title TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_memory_entries_user ON memory_entries(user_id);
 `);
 
 // Migratie: 'memory' kolom toevoegen aan bestaande installaties die 'm nog
@@ -49,6 +61,24 @@ if (!userColumns.includes('memory')) {
 }
 if (!userColumns.includes('github_token')) {
   db.exec("ALTER TABLE users ADD COLUMN github_token TEXT");
+}
+if (!userColumns.includes('memory_auto_update')) {
+  db.exec("ALTER TABLE users ADD COLUMN memory_auto_update INTEGER NOT NULL DEFAULT 1");
+}
+
+// Eenmalige migratie: bestaande (oude, ongestructureerde) geheugentekst
+// overzetten naar één topic-item, zodat niemand data kwijtraakt bij de
+// overstap naar gestructureerd geheugen.
+const usersWithOldMemory = db.prepare(
+  "SELECT id, memory FROM users WHERE memory IS NOT NULL AND trim(memory) != ''"
+).all();
+for (const u of usersWithOldMemory) {
+  const already = db.prepare('SELECT COUNT(*) as n FROM memory_entries WHERE user_id = ?').get(u.id).n;
+  if (already === 0) {
+    db.prepare(
+      'INSERT INTO memory_entries (user_id, category, title, content, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(u.id, 'topic', 'Eerdere notities', u.memory, Date.now());
+  }
 }
 
 module.exports = db;
