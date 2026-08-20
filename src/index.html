@@ -2348,25 +2348,15 @@
   const STREAM_DISPLAY_TAIL_CHARS = 20000;
 
   function cleanStreamingText(text){
-    let working = text;
-    let truncated = false;
-    if (working.length > STREAM_DISPLAY_TAIL_CHARS) {
-      working = working.slice(-STREAM_DISPLAY_TAIL_CHARS);
-      truncated = true;
-    }
-
-    // Elk codeblok dat eruitziet als een écht bestand (een genoemde
-    // bestandsnaam ervoor, of een herkende programmeertaal met meer dan
-    // 3 regels) tonen we tijdens het streamen niet als rauwe, groeiende
-    // tekst — dat geldt zowel voor het blok waar de AI middenin zit, als
-    // voor blokken die al wél zijn afgesloten maar waarna de AI nog
-    // doorschrijft (uitleg, of nóg een bestand). Zonder dat zou een net-
-    // afgesloten bestand terugspringen naar volledig zichtbare platte
-    // tekst tot het hele antwoord af is. Pas bij het echt afronden van
-    // het bericht (renderMarkdownSafe + enhanceCodeBlocks) worden het
-    // stuk voor stuk de bekende, inklapbare bestandskaartjes.
+    // Belangrijk: EERST de bestand-detectie/samenvatting op de VOLLEDIGE,
+    // onbegrensde tekst laten draaien — pas DAARNA (indien nodig) de
+    // staart begrenzen. Andersom (zoals het eerder was) kon de grens
+    // dwars door een nog-niet-samengevat, actief groeiend codeblok heen
+        // snijden bij een lang gesprek — dat zag er dan uit alsof de code
+    // stukje bij beetje "wegveegde" terwijl er verder werd getypt, omdat
+    // de grens elke keer weer een stukje verder opschoof.
     const NON_FILE_LANGS = ['', 'txt', 'text', 'plaintext', 'plain', 'output', 'console'];
-    const lines = working.split('\n');
+    const lines = text.split('\n');
     const outLines = [];
     let i = 0;
     while (i < lines.length) {
@@ -2415,13 +2405,22 @@
       i++;
     }
 
-    const cleaned = outLines.join('\n')
+    let cleaned = outLines.join('\n')
       .replace(/^```[a-zA-Z0-9_+-]*\s*$/gm, '')
       .replace(/^#{1,6}\s+/gm, '')
       .replace(/^-{3,}\s*$/gm, '')
       .replace(/\*\*(.+?)\*\*/g, '$1')
       .replace(/\n{3,}/g, '\n\n');
-    return (truncated ? '(dit antwoord loopt door — eerder deel verschijnt weer zodra het klaar is)\n\n' : '') + cleaned;
+
+    // Pas HIERNA, op het al opgeschoonde resultaat, eventueel nog de
+    // staart begrenzen — dat resultaat is meestal al veel compacter dan
+    // de ruwe tekst (afgesloten bestanden zijn al tot één regel
+    // teruggebracht), dus dit grijpt nog maar zelden in, en snijdt in elk
+    // geval nooit meer dwars door een nog-actief-groeiend codeblok heen.
+    if (cleaned.length > STREAM_DISPLAY_TAIL_CHARS) {
+      cleaned = '(dit antwoord loopt door — eerder deel verschijnt weer zodra het klaar is)\n\n' + cleaned.slice(-STREAM_DISPLAY_TAIL_CHARS);
+    }
+    return cleaned;
   }
 
   function renderMarkdownSafe(text){
