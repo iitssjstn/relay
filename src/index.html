@@ -1461,18 +1461,8 @@
   // afgekapt antwoord" (die reageert op de API zelf) merkt daar niets van.
   const LARGE_TASK_HONESTY_INSTRUCTION = "Als een verzoek te omvangrijk is om volledig en degelijk in dit ene antwoord af te maken (bijvoorbeeld een compleet meerdelig project met veel losse onderdelen): zeg dat dan expliciet, aan het begin ÉN aan het einde van je antwoord. Noem concreet welke onderdelen je in dit antwoord wél hebt gedaan en welke nog open staan, en vraag de gebruiker om te reageren (bv. \"ga verder\") voor de rest. Presenteer een gedeeltelijk resultaat NOOIT stilzwijgend alsof het compleet en af is.";
 
-  // Vangt het patroon dat de automatische "vervolg opvragen bij een
-  // afgekapt antwoord" hierboven NIET afvangt: de gebruiker die zelf met
-  // "ga verder" / "maak af" om een vervolg vraagt, vaak na een providerswitch
-  // of nieuw bericht. Zonder deze instructie is gezien dat een AI dan
-  // opnieuw begint met een koptekst/label, eerder gegeven code herhaalt, of
-  // in platte tekst meldt dat het vorige antwoord is afgebroken — soms zelfs
-  // middenin een open codeblok, wat het resultaat onbruikbaar maakt als het
-  // rechtstreeks in bestanden wordt geplakt.
-  const CONTINUATION_INTEGRITY_INSTRUCTION = "Als de gebruiker vraagt om verder te gaan, af te maken, of een vervolg te geven op eerder door jou gegeven code of een eerder bestand (bijvoorbeeld na \"ga verder\", \"maak af\", of een soortgelijk verzoek): ga dan UITSLUITEND verder vanaf exact het punt waar je eerder stopte, als was het één ononderbroken codeblok. Regels die hierbij ALTIJD gelden:\n- Nooit tekst zoals \"het vorige antwoord was afgebroken\", \"hier is het ontbrekende deel\", of vergelijkbare meta-commentaar ergens in je antwoord opnemen — ook niet buiten het codeblok, en zeker niet erbinnen.\n- Nooit markdown-koppen, \"(vervolg)\"-, \"(deel 2)\"- of \"(compleet)\"-labels tussen of in codeblokken plaatsen.\n- Nooit code herhalen die je al eerder in het gesprek voor hetzelfde bestand hebt gegeven — ga puur verder waar je gebleven was, zodat de twee stukken samen precies één geldig, doorlopend bestand vormen zonder duplicatie.\n- Twijfel je of je exact op de juiste plek verder gaat? Herhaal dan liever de laatste volledige regel of functie als anker (en zeg dat kort vóór het codeblok), dan een heel stuk opnieuw plakken.";
-
   function buildSystemText(){
-    const parts = [FILE_FORMAT_INSTRUCTION, LARGE_TASK_HONESTY_INSTRUCTION, CONTINUATION_INTEGRITY_INSTRUCTION];
+    const parts = [FILE_FORMAT_INSTRUCTION, LARGE_TASK_HONESTY_INSTRUCTION];
     if (memoryEntries.length) {
       // Gegroepeerd per categorie tonen, net als bij Claude's eigen
       // geheugenscherm — en expliciet omkaderen als passieve achtergrondinfo
@@ -2303,8 +2293,8 @@
       while (back >= 0 && hops < 3) {
         const t = outLines[back].trim();
         if (t) {
-          const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
-          if (m) { filenameHint = m[1]; break; }
+          const m = detectFilenameInLine(t);
+          if (m) { filenameHint = m; break; }
           hops++;
         }
         back--;
@@ -2492,6 +2482,24 @@
   // er dan nog een uit de code zelf te halen — vaak nuttiger dan een kaal
   // volgnummer. Kijkt naar een shebang/commentaarregel bovenaan (bv.
   // "# deploy.sh"), of bij YAML naar een top-level "name:"-veld.
+  // Bekende bestandsnamen zonder extensie (Dockerfile, Makefile, etc.) —
+  // deze hebben geen ".ext" om op te herkennen, dus die missen de gewone
+  // regex hieronder. Los als vaste lijst opgevangen.
+  const EXTENSIONLESS_FILENAMES = /^(Dockerfile|Makefile|Procfile|Vagrantfile|Gemfile|Rakefile|Jenkinsfile|LICENSE|CHANGELOG)(\.[A-Za-z0-9]+)?$/i;
+
+  // Probeert een bestandsnaam te herkennen in een stukje tekst (meestal
+  // de regel vlak vóór een codeblok). Haalt eerst opmaaktekens (vetgedrukt,
+  // cursief, code-backticks) van de randen — anders mist de detectie een
+  // naam die de AI als **bestand.ts** of `bestand.ts` schreef, omdat de
+  // extensie dan niet meer helemaal aan het eind van de regel staat.
+  function detectFilenameInLine(rawLine){
+    const t = rawLine.trim().replace(/^[*_`]+|[*_`]+$/g, '').trim();
+    if (!t || t.length >= 80) return null;
+    if (EXTENSIONLESS_FILENAMES.test(t.replace(/:$/, ''))) return t.replace(/:$/, '');
+    const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
+    return m ? m[1] : null;
+  }
+
   function guessNameFromContent(rawCode, lang, ext){
     const lines = rawCode.split('\n').slice(0, 5);
 
@@ -2565,8 +2573,8 @@
       for (let hops = 0; hops < 3 && sib && !filename; hops++) {
         const t = sib.textContent.trim();
         if (t.length > 0 && t.length < 80) {
-          const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
-          if (m) { filename = m[1]; filenameLabelEl = sib; }
+          const m = detectFilenameInLine(t);
+          if (m) { filename = m; filenameLabelEl = sib; }
         }
         // Stop bij een ander codeblok of een duidelijk langere alinea —
         // dan zijn we voorbij de context van dít blok.
