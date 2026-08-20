@@ -1454,8 +1454,15 @@
   // niet per ongeluk als "bestand" worden behandeld.
   const FILE_FORMAT_INSTRUCTION = "Als je bestanden voor een project of script maakt, gebruik dan ALTIJD dit exacte formaat — de volledige bestandsnaam (incl. pad) als eigen regel, direct vóór het codeblok, zonder sterretjes of andere opmaak eromheen, en met een taalaanduiding na de backticks die bij het bestandstype past:\n\nsrc/app.py\n```python\n...inhoud...\n```\n\nDit geldt voor ELK bestand dat je voorstelt, ook bij meerdere bestanden in één antwoord — sla deze naamregel nooit over, ook niet als de bestandsnaam al ergens anders in je tekst genoemd werd. Gebruik codeblokken zonder taalaanduiding (of met alleen \"txt\") alleen voor losse voorbeeldcommando's, terminaloutput of illustraties die geen aan te maken bestand zijn — die worden namelijk niet als bestand behandeld.";
 
+  // Voorkomt dat een AI bij een zeer omvangrijk verzoek (bv. een compleet
+  // meerdelig project) in stilte maar een deel oplevert en dat als
+  // compleet presenteert — de AI stopt dan vrijwillig, niet door een
+  // tokenlimiet, dus Relay's automatische "vervolg opvragen bij een
+  // afgekapt antwoord" (die reageert op de API zelf) merkt daar niets van.
+  const LARGE_TASK_HONESTY_INSTRUCTION = "Als een verzoek te omvangrijk is om volledig en degelijk in dit ene antwoord af te maken (bijvoorbeeld een compleet meerdelig project met veel losse onderdelen): zeg dat dan expliciet, aan het begin ÉN aan het einde van je antwoord. Noem concreet welke onderdelen je in dit antwoord wél hebt gedaan en welke nog open staan, en vraag de gebruiker om te reageren (bv. \"ga verder\") voor de rest. Presenteer een gedeeltelijk resultaat NOOIT stilzwijgend alsof het compleet en af is.";
+
   function buildSystemText(){
-    const parts = [FILE_FORMAT_INSTRUCTION];
+    const parts = [FILE_FORMAT_INSTRUCTION, LARGE_TASK_HONESTY_INSTRUCTION];
     if (memoryEntries.length) {
       // Gegroepeerd per categorie tonen, net als bij Claude's eigen
       // geheugenscherm — en expliciet omkaderen als passieve achtergrondinfo
