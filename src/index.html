@@ -467,6 +467,26 @@
   .account-popup-item.danger:hover{ color: var(--danger); }
   .account-popup-divider{ height:1px; background: var(--border-soft); margin:5px 4px; }
 
+  .toast-stack{
+    position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+    z-index:200; display:flex; flex-direction:column; gap:8px;
+    align-items:center; pointer-events:none;
+  }
+  .toast{
+    display:flex; align-items:center; gap:9px;
+    background: var(--panel); border:1px solid var(--danger);
+    color: var(--text); font-size:12.5px;
+    padding: 9px 14px; border-radius:9px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+    pointer-events:auto;
+    animation: toast-in .18s ease;
+    max-width: 90vw;
+  }
+  .toast.toast-info{ border-color: var(--border); }
+  @keyframes toast-in{ from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:translateY(0); } }
+  .toast-dot{ width:7px; height:7px; border-radius:50%; background: var(--danger); flex-shrink:0; }
+  .toast.toast-info .toast-dot{ background: var(--text-faint); }
+
   .ghost-btn{
     flex:1;
     background: var(--panel-2);
@@ -1093,6 +1113,7 @@
 </div>
 
 <div class="app hidden" id="appRoot" data-app-root>
+  <div class="toast-stack" id="toastStack"></div>
   <aside class="sidebar" id="sidebar">
     <div class="brand">
       <div class="brand-mark">
@@ -1146,6 +1167,7 @@
       <div style="display:flex; align-items:center; gap:10px;">
         <span class="active-badge none" id="activeBadge">geen AI actief</span>
         <div class="header-actions">
+          <button class="icon-btn" id="exportConvBtn" title="Gesprek downloaden als Markdown">↓ export</button>
           <button class="icon-btn" id="clearBtn">Wis gesprek</button>
         </div>
       </div>
@@ -1173,8 +1195,8 @@
         <input type="file" id="fileUploadInput" multiple style="display:none">
         <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
         <textarea id="input" rows="1" placeholder="Typ je vraag..." disabled></textarea>
-        <button class="send-btn" id="sendBtn" disabled>↑</button>
-        <button class="send-btn stop-btn" id="stopBtn" style="display:none;" title="Stoppen">■</button>
+        <button class="send-btn" id="sendBtn" disabled aria-label="Bericht versturen">↑</button>
+        <button class="send-btn stop-btn" id="stopBtn" style="display:none;" title="Stoppen" aria-label="Stoppen met genereren">■</button>
       </div>
       <div class="composer-hint">API-keys en gesprekken worden bewaard bij jouw account op deze Relay-server. Berichten lopen via de Relay-server naar de AI-provider die je zelf kiest (dat voorkomt browserblokkades bij sommige providers) — de server bewaart of leest de inhoud daarvan niet. Log volgende keer gewoon in om verder te gaan.</div>
     </div>
@@ -1894,6 +1916,7 @@
     if (top < 8) top = rect.bottom + 6; // te weinig ruimte erboven -> eronder tonen
     let left = rect.left;
     if (left + popupWidth > window.innerWidth - 8) left = window.innerWidth - popupWidth - 8;
+    left = Math.max(8, left);
     accountPopup.style.top = top + 'px';
     accountPopup.style.left = left + 'px';
   }
@@ -1923,6 +1946,31 @@
   // elkaar vuren zodra een AI-antwoord klaar is) allemaal apart het
   // inlogscherm proberen te tonen zodra er één keer een 401 langskomt.
   let sessionExpiryHandled = false;
+
+  // Kleine, niet-opdringerige melding onderin het scherm — voor dingen die
+  // wél de gebruiker moeten weten maar geen popup/modal rechtvaardigen,
+  // zoals een achtergrond-opslag die stilletjes mislukte. Dezelfde melding
+  // wordt binnen 15s niet herhaald — anders zou een aanhoudend
+  // verbindingsprobleem (bv. tijdens de tussentijdse opslag om de paar
+  // seconden) de toast steeds opnieuw laten verschijnen.
+  const recentToastMessages = new Map();
+  function showToast(message, type){
+    const stack = $('toastStack');
+    if (!stack) return;
+    const now = Date.now();
+    if (recentToastMessages.has(message) && now - recentToastMessages.get(message) < 15000) return;
+    recentToastMessages.set(message, now);
+    const el = document.createElement('div');
+    el.className = 'toast' + (type === 'info' ? ' toast-info' : '');
+    el.innerHTML = '<span class="toast-dot"></span><span></span>';
+    el.querySelector('span:last-child').textContent = message;
+    stack.appendChild(el);
+    setTimeout(() => {
+      el.style.transition = 'opacity .2s ease';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 220);
+    }, 4200);
+  }
 
   async function apiFetch(path, options){
     options = options || {};
@@ -1964,7 +2012,7 @@
     // deze sessie — horen niet in de opgeslagen server-config terecht te komen.
     const cleanNodes = nodes.map(({ coolDownUntil, rateLimitInfo, ...rest }) => rest);
     try { await apiFetch('/api/nodes', { method: 'PUT', body: { nodes: cleanNodes, activeIndex } }); }
-    catch (e) { console.error('Instellingen opslaan mislukt:', e.message); }
+    catch (e) { console.error('Instellingen opslaan mislukt:', e.message); showToast('Kon je AI-instellingen niet opslaan — controleer je verbinding.'); }
   }
 
   async function loadNodesFromServer(){
@@ -2003,7 +2051,7 @@
       if (idx !== -1) convIndex[idx] = meta; else convIndex.unshift(meta);
       convIndex.sort((a, b) => b.updatedAt - a.updatedAt);
       renderConvList();
-    } catch (e) { console.error('Gesprek opslaan mislukt:', e.message); }
+    } catch (e) { console.error('Gesprek opslaan mislukt:', e.message); showToast('Kon dit gesprek niet opslaan — controleer je verbinding.'); }
   }
 
   // Laat de zojuist-actieve AI een korte, beschrijvende titel bedenken op
@@ -3033,6 +3081,31 @@
     URL.revokeObjectURL(url);
   }
 
+  // Zet het huidige gesprek om naar leesbare Markdown, met de naam van de
+  // AI erbij per antwoord — handig om een gesprek te bewaren of elders te
+  // delen, los van Relay zelf.
+  function conversationToMarkdown(){
+    const title = titleFromConversation(conversation);
+    let md = '# ' + title + '\n\n';
+    conversation.forEach(m => {
+      if (m.role === 'user') {
+        md += '### Jij\n\n' + m.content + '\n\n';
+        if (m.images && m.images.length) md += '*(' + m.images.length + ' afbeelding' + (m.images.length === 1 ? '' : 'en') + ' bijgevoegd, niet in deze export opgenomen)*\n\n';
+        if (m.files && m.files.length) md += '*(bijgevoegd: ' + m.files.map(f => f.name).join(', ') + ')*\n\n';
+      } else if (m.role === 'assistant') {
+        md += '### ' + (m.providerName || 'AI') + '\n\n' + m.content + '\n\n';
+      }
+      md += '---\n\n';
+    });
+    return md;
+  }
+
+  $('exportConvBtn').addEventListener('click', () => {
+    if (!conversation.length) { showToast('Nog geen gesprek om te exporteren.', 'info'); return; }
+    const title = titleFromConversation(conversation).replace(/[^a-z0-9\-_. ]/gi, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'gesprek';
+    downloadTextFile(title + '.md', conversationToMarkdown());
+  });
+
   $('clearBtn').addEventListener('click', () => {
     createNewConversation();
   });
@@ -3727,6 +3800,17 @@
       const contents = workingHistory.map(m => m.__rawContent
         ? { role: m.role, parts: m.__rawContent }
         : { role: m.role === 'assistant' ? 'model' : 'user', parts: googleMessageParts(m) });
+
+      // Gemini staat het NIET toe dat een verzoek eindigt met een model-
+      // beurt — in tegenstelling tot Anthropic, dat dit juist als officiële
+      // manier ondersteunt om een afgekapt antwoord te vervolgen (waar
+      // Relay's automatische-vervolg-functie op leunt). Komt dat hier toch
+      // voor, voeg dan een korte, expliciete "ga verder"-gebruikersbeurt
+      // toe zodat het verzoek geldig blijft.
+      if (contents.length && contents[contents.length - 1].role !== 'user') {
+        contents.push({ role: 'user', parts: [{ text: 'Ga verder waar je gebleven was. Herhaal niets van wat je al hebt geschreven, en begin niet opnieuw.' }] });
+      }
+
       const body = {
         contents,
         generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
@@ -4371,6 +4455,23 @@
     await deferredInstallPrompt.userChoice;
     deferredInstallPrompt = null;
     installBanner.classList.remove('show');
+  });
+
+  // ---------- Escape sluit het bovenste open scherm ----------
+  // Eén centrale plek i.p.v. per overlay een losse listener — controleert
+  // in een logische volgorde (kleinste/bovenste eerst) welk scherm open
+  // staat en sluit alleen dát ene.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (accountPopup.style.display === 'block') { closeAccountPopup(); return; }
+    if (attachMenu.classList.contains('show')) { attachMenu.classList.remove('show'); return; }
+    if ($('modalOverlay').style.display === 'flex') { closeModal(); return; }
+    if (githubTokenOverlay.style.display === 'flex') { closeGithubTokenModal(); return; }
+    if (e2bTokenOverlay.style.display === 'flex') { closeE2BTokenModal(); return; }
+    if (memoryOverlay.style.display === 'flex') { memoryOverlay.style.display = 'none'; return; }
+    if (adminOverlay.style.display === 'flex') { adminOverlay.style.display = 'none'; return; }
+    if (appRoot.classList.contains('artifact-open')) { closeArtifactPanel(); return; }
+    if (sidebarEl.classList.contains('open')) { closeMobileSidebar(); return; }
   });
 
   // init: check of er al een geldige sessie is
