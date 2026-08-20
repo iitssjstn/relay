@@ -1167,6 +1167,7 @@
       <div style="display:flex; align-items:center; gap:10px;">
         <span class="active-badge none" id="activeBadge">geen AI actief</span>
         <div class="header-actions">
+          <button class="icon-btn" id="compressConvBtn" title="Ouder deel van dit gesprek samenvatten om tokens te besparen" style="display:none;">comprimeer</button>
           <button class="icon-btn" id="exportConvBtn" title="Gesprek downloaden als Markdown">↓ export</button>
           <button class="icon-btn" id="clearBtn">Wis gesprek</button>
         </div>
@@ -1298,6 +1299,14 @@
       <div class="field-hint">Test na afloop van elk antwoord automatisch de bestanden die de AI daadwerkelijk heeft geschreven (niet losse, door de AI zelf verzonnen test-snippets) — rechtstreeks via Relay, buiten het gesprek met de AI om. Kost dus geen extra AI-tokens. De AI ziet het resultaat niet en reageert er niet op; je ziet het gewoon zelf in de chat staan. Vereist een E2B API-key onder je accountmenu.</div>
     </div>
 
+    <div class="field">
+      <label class="checkbox-label">
+        <input id="fCreateFilesAsTool" type="checkbox">
+        Bestanden expliciet benoemen (100% betrouwbaar, kost één extra rondje)
+      </label>
+      <div class="field-hint">Laat de AI bestandsnamen niet meer in lopende tekst noemen, maar rechtstreeks en verplicht doorgeven via een aparte, gestructureerde actie — zo kan er nooit meer een verkeerde of generieke naam ("bestand-1.py") ontstaan. Kost per antwoord met bestanden ongeveer één extra rondje met de AI (het gesprek gaat dan nog een keer mee) — vergelijkbaar met hoe Claude zelf bestanden aanmaakt.</div>
+    </div>
+
     <div class="copyright-note">
       Let op: elke provider heeft zijn eigen gebruiksvoorwaarden. Gebruik deze tool alleen met API-keys waar je zelf recht toe hebt, en respecteer de auteursrechten en herpublicatie-regels van de betreffende aanbieder — output van een AI-model overnemen als eigen werk of zonder toestemming commercieel herpubliceren kan in strijd zijn met die voorwaarden.
     </div>
@@ -1410,6 +1419,25 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" id="e2bTokenCloseBtn">Sluiten</button>
       <button class="btn btn-primary" id="e2bTokenSaveBtn">Opslaan</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="compressPreviewOverlay" style="display:none;">
+  <div class="modal" style="max-width:520px;">
+    <h2>Gesprek comprimeren</h2>
+    <div class="modal-sub" id="compressPreviewSub">Het oudere deel van dit gesprek wordt vervangen door onderstaande samenvatting — de laatste berichten blijven ongewijzigd staan. Dit bespaart aanzienlijk op tokens bij elk volgend bericht, maar details die niet in de samenvatting terechtkomen, gaan wel verloren.</div>
+
+    <div class="field">
+      <label>Samenvatting (je kunt deze eerst nog aanpassen)</label>
+      <textarea id="compressPreviewText" rows="10" style="width:100%; resize:vertical; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:10px 11px; font-size:12.5px; line-height:1.5; outline:none; font-family:var(--font-mono);"></textarea>
+    </div>
+
+    <div id="compressPreviewMsg" style="display:none; font-size:11.5px; margin-top:4px; margin-bottom:6px; line-height:1.4;"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="compressPreviewCancelBtn">Annuleren</button>
+      <button class="btn btn-primary" id="compressPreviewConfirmBtn">Toepassen</button>
     </div>
   </div>
 </div>
@@ -2107,11 +2135,13 @@
     renderConvList();
     closeMobileSidebar();
     closeArtifactPanel();
+    updateCompressButtonVisibility();
   }
 
   function renderFullConversation(){
     autoScrollToBottom = true;
     updateScrollBottomBtn();
+    updateCompressButtonVisibility();
     messagesEl.innerHTML = '';
     if (conversation.length === 0) {
       messagesEl.appendChild(emptyState);
@@ -2119,7 +2149,7 @@
     }
     conversation.forEach(m => {
       if (m.role === 'user') addMessage('user', m.content, { images: m.images, files: m.files });
-      else addMessage('assistant', m.content, { providerName: m.providerName || 'AI' });
+      else addMessage('assistant', m.content, { providerName: m.providerName || 'AI', toolFiles: m.toolFiles });
     });
   }
 
@@ -2543,6 +2573,33 @@
   // regex hieronder. Los als vaste lijst opgevangen.
   const EXTENSIONLESS_FILENAMES = /^(Dockerfile|Makefile|Procfile|Vagrantfile|Gemfile|Rakefile|Jenkinsfile|LICENSE|CHANGELOG)(\.[A-Za-z0-9]+)?$/i;
 
+  // Bekende bestandsextensies om op te scannen wanneer we het hele bericht
+  // doorzoeken op eerder genoemde namen (bv. in een lijstje bovenaan een
+  // antwoord: "ik maak: .env, docker-compose.yml, deploy.sh..."). Bewust
+  // een vaste lijst i.p.v. "elke extensie toestaan" — dat laatste zou ook
+  // dingen als "Node.js" of "versie 2.0" per ongeluk als bestandsnaam zien.
+  const FALLBACK_SCAN_EXTENSIONS = ['env','yml','yaml','sh','bash','md','json','py','js','jsx','ts','tsx','html','css','scss','sql','conf','ini','toml','xml','vue','svelte','go','rs','java','rb','php','c','cpp','h','txt','gitkeep','gitignore','dockerignore','editorconfig'];
+
+  // Doorzoekt het hele bericht (niet alleen de regel vlak boven een blok)
+  // op bestandsnamen die ergens genoemd worden — levert een lijst op, in
+  // de volgorde waarin ze voorkomen. Wordt pas gebruikt als vangnet, en
+  // alleen als de extensie exact overeenkomt met het codeblok in kwestie
+  // — zo kan er nooit een verkeerd-type naam aan een blok vastgeplakt
+  // worden, hooguit wordt een kans gemist.
+  function scanMentionedFilenames(containerEl){
+    const text = containerEl.textContent || '';
+    // De eerste groep vangt de grens vóór de naam op (begin van de tekst,
+    // of een teken dat zelf geen deel van een bestandsnaam kan zijn) —
+    // zo kunnen ook "dotfiles" zonder eigen naam ervoor worden herkend
+    // (bv. ".env"), zonder een woordgrens-anker te gebruiken die daar
+    // juist niet op zou slaan.
+    const re = new RegExp('(^|[^\\w.\\-\\/])((?:[A-Za-z0-9_][A-Za-z0-9_.\\-\\/]*)?\\.(' + FALLBACK_SCAN_EXTENSIONS.join('|') + '))\\b', 'g');
+    const found = [];
+    let m;
+    while ((m = re.exec(text))) found.push(m[2]);
+    return found;
+  }
+
   // Probeert een bestandsnaam te herkennen in een stukje tekst (meestal
   // de regel vlak vóór een codeblok). Haalt eerst opmaaktekens (vetgedrukt,
   // cursief, code-backticks) van de randen — anders mist de detectie een
@@ -2586,6 +2643,18 @@
         if (/^[\w@/.\-]+$/.test(m[1])) return 'package.json';
       }
     }
+
+    // .env-bestanden krijgen zelf vrijwel nooit een eigen taalaanduiding
+    // in een codeblok (vaak gewoon "bash", of helemaal geen taal) — maar
+    // zijn wel herkenbaar aan uitsluitend SLEUTEL=WAARDE-regels. In dat
+    // geval is ".env" zo goed als altijd de verwachte, juiste naam.
+    const ENV_LIKE_LANGS = ['bash', 'sh', 'shell', 'zsh', 'env', 'properties', 'text', 'plaintext', ''];
+    if (ENV_LIKE_LANGS.includes(lang)) {
+      const meaningfulLines = lines.filter(l => l.trim() && !l.trim().startsWith('#'));
+      if (meaningfulLines.length >= 2 && meaningfulLines.every(l => /^[A-Za-z_][A-Za-z0-9_]*=\S*$/.test(l.trim()))) {
+        return '.env';
+      }
+    }
     return null;
   }
 
@@ -2603,11 +2672,60 @@
     });
   }
 
+  // Bouwt één bestandskaartje op — herbruikt zowel voor tekst-gedetecteerde
+  // bestanden (enhanceCodeBlocks) als voor bestanden die de AI expliciet
+  // via de create_files-tool heeft doorgegeven (100% betrouwbare naam,
+  // geen giswerk nodig).
+  function createFileChipElement(filename, content, lineCount){
+    if (lineCount === undefined) lineCount = content.split('\n').filter(l => l.trim() !== '').length;
+    const card = document.createElement('div');
+    card.className = 'code-file-chip';
+    card.innerHTML = `
+      <span class="code-file-chip-name">${escapeHtml(filename)}</span>
+      <span class="code-file-chip-meta">${lineCount} regel${lineCount === 1 ? '' : 's'}</span>
+    `;
+    card.addEventListener('click', () => showArtifact(filename, content));
+    return card;
+  }
+
+  // Bouwt de "Alle N bestanden als ZIP"-knop op — herbruikt voor zowel
+  // tekst-gedetecteerde als tool-aangeleverde bestanden.
+  function createZipButtonElement(files){
+    const zipBtn = document.createElement('button');
+    zipBtn.type = 'button';
+    zipBtn.className = 'code-file-chip code-file-zip-btn';
+    zipBtn.innerHTML = `<span class="code-file-chip-name">Alle ${files.length} bestanden als ZIP</span>`;
+    zipBtn.addEventListener('click', async () => {
+      if (!window.JSZip) {
+        zipBtn.querySelector('.code-file-chip-name').textContent = 'ZIP-bibliotheek niet beschikbaar — download bestanden los';
+        return;
+      }
+      const original = zipBtn.querySelector('.code-file-chip-name').textContent;
+      zipBtn.querySelector('.code-file-chip-name').textContent = 'Bezig...';
+      try {
+        const zip = new window.JSZip();
+        files.forEach(f => zip.file(f.path, f.content));
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'bestanden.zip';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        zipBtn.querySelector('.code-file-chip-name').textContent = 'ZIP maken mislukt';
+      } finally {
+        setTimeout(() => { zipBtn.querySelector('.code-file-chip-name').textContent = original; }, 1600);
+      }
+    });
+    return zipBtn;
+  }
+
   function enhanceCodeBlocks(containerEl){
     const chips = [];
     const filesInMessage = [];
     const usedNames = new Set();
     let genericCounter = 0;
+    const mentionedFilenames = scanMentionedFilenames(containerEl);
 
     containerEl.querySelectorAll('pre > code').forEach(codeEl => {
       const preEl = codeEl.parentElement;
@@ -2657,6 +2775,14 @@
         const ext = CODE_EXT_MAP[lang] || lang || 'txt';
         filename = guessNameFromContent(rawCode, lang, ext);
         if (!filename) {
+          // Vangnet: staat deze bestandsnaam misschien al ergens eerder in
+          // het bericht genoemd (bv. in een lijstje bovenaan), ook al
+          // stond 'ie niet direct boven dit specifieke blok? Alleen
+          // gebruiken bij een exact overeenkomende extensie, en nooit een
+          // naam die al aan een ander blok is toegekend.
+          filename = mentionedFilenames.find(f => !usedNames.has(f) && f.toLowerCase().endsWith('.' + ext.toLowerCase())) || null;
+        }
+        if (!filename) {
           genericCounter++;
           filename = ext === 'dockerfile' ? 'Dockerfile-' + genericCounter : ('bestand-' + genericCounter + '.' + ext);
         }
@@ -2675,13 +2801,7 @@
       }
       usedNames.add(filename);
 
-      const card = document.createElement('div');
-      card.className = 'code-file-chip';
-      card.innerHTML = `
-        <span class="code-file-chip-name">${escapeHtml(filename)}</span>
-        <span class="code-file-chip-meta">${lineCount} regel${lineCount === 1 ? '' : 's'}</span>
-      `;
-      card.addEventListener('click', () => showArtifact(filename, rawCode));
+      const card = createFileChipElement(filename, rawCode, lineCount);
 
       // Niet ter plekke invoegen — gewoon weghalen uit de tekst, en
       // verzamelen om straks samen onderaan het bericht te tonen. Het
@@ -2702,33 +2822,7 @@
       // Alleen als dit ene bericht meer dan 1 bestand opleverde, een
       // ZIP-knop tonen — puur voor déze bestanden, niet het hele gesprek.
       if (filesInMessage.length > 1) {
-        const zipBtn = document.createElement('button');
-        zipBtn.type = 'button';
-        zipBtn.className = 'code-file-chip code-file-zip-btn';
-        zipBtn.innerHTML = `<span class="code-file-chip-name">Alle ${filesInMessage.length} bestanden als ZIP</span>`;
-        zipBtn.addEventListener('click', async () => {
-          if (!window.JSZip) {
-            zipBtn.querySelector('.code-file-chip-name').textContent = 'ZIP-bibliotheek niet beschikbaar — download bestanden los';
-            return;
-          }
-          const original = zipBtn.querySelector('.code-file-chip-name').textContent;
-          zipBtn.querySelector('.code-file-chip-name').textContent = 'Bezig...';
-          try {
-            const zip = new window.JSZip();
-            filesInMessage.forEach(f => zip.file(f.path, f.content));
-            const blob = await zip.generateAsync({ type: 'blob' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = 'bestanden.zip';
-            document.body.appendChild(a); a.click(); a.remove();
-            URL.revokeObjectURL(url);
-          } catch (e) {
-            zipBtn.querySelector('.code-file-chip-name').textContent = 'ZIP maken mislukt';
-          } finally {
-            setTimeout(() => { zipBtn.querySelector('.code-file-chip-name').textContent = original; }, 1600);
-          }
-        });
-        wrap.appendChild(zipBtn);
+        wrap.appendChild(createZipButtonElement(filesInMessage));
       }
 
       containerEl.appendChild(wrap);
@@ -2779,11 +2873,25 @@
         <div class="avatar">${avatarLabel}</div>
         <div>
           ${opts.providerName ? `<div class="msg-meta">${escapeHtml(opts.providerName)}</div>` : ''}
+          <div class="tool-run-list"></div>
           ${bubbleHtml}
         </div>
       `;
       if (content) addCopyButton(wrap.querySelector('.bubble'), content);
-      if (role === 'assistant') { wrapTables(wrap.querySelector('.bubble')); enhanceCodeBlocks(wrap.querySelector('.bubble')); }
+      if (role === 'assistant') {
+        wrapTables(wrap.querySelector('.bubble'));
+        enhanceCodeBlocks(wrap.querySelector('.bubble'));
+        // Bestanden die de AI destijds via de create_files-tool aanleverde
+        // — apart opgeslagen bij het bericht, dus ook na een herlaadbeurt
+        // van de pagina gewoon weer als dezelfde kaartjes te zien.
+        if (opts.toolFiles && opts.toolFiles.length) {
+          const toolWrap = document.createElement('div');
+          toolWrap.className = 'code-file-chips-wrap tool-files-wrap';
+          opts.toolFiles.forEach(f => toolWrap.appendChild(createFileChipElement(f.path, f.content)));
+          if (opts.toolFiles.length > 1) toolWrap.appendChild(createZipButtonElement(opts.toolFiles));
+          wrap.querySelector('.tool-run-list').appendChild(toolWrap);
+        }
+      }
     }
     messagesEl.appendChild(wrap);
     if (autoScrollToBottom) scrollMessagesToBottom();
@@ -2838,6 +2946,8 @@
     const thinkText = wrap.querySelector('.thinking-text');
     const thinkToggle = wrap.querySelector('.thinking-toggle');
     const toolRunList = wrap.querySelector('.tool-run-list');
+    let toolFilesWrap = null; // op-aanvraag aangemaakt, alleen als de create_files-tool ook echt gebruikt wordt
+    let toolFilesList = [];
     let currentToolBlock = null;
     let thinkingStartedAt = null;
     let thinkingOpen = false;
@@ -2905,6 +3015,26 @@
         thinkText.textContent = text;
         if (autoScrollToBottom) scrollMessagesToBottom();
       },
+      // Wordt aangeroepen zodra de AI expliciet bestanden doorgeeft via de
+      // create_files-tool (100% betrouwbare naam, geen giswerk uit tekst
+      // nodig). Toont ze als dezelfde bekende bestandskaartjes, in een
+      // eigen kader los van tekst-gedetecteerde bestanden.
+      toolFiles(files){
+        if (!files || !files.length) return;
+        if (!toolFilesWrap) {
+          toolFilesWrap = document.createElement('div');
+          toolFilesWrap.className = 'code-file-chips-wrap tool-files-wrap';
+          toolRunList.appendChild(toolFilesWrap);
+        }
+        files.forEach(f => {
+          toolFilesList.push(f);
+          toolFilesWrap.insertBefore(createFileChipElement(f.path, f.content), toolFilesWrap.querySelector('.code-file-zip-btn'));
+        });
+        const existingZip = toolFilesWrap.querySelector('.code-file-zip-btn');
+        if (existingZip) existingZip.remove();
+        if (toolFilesList.length > 1) toolFilesWrap.appendChild(createZipButtonElement(toolFilesList));
+        if (autoScrollToBottom) scrollMessagesToBottom();
+      },
       // Wordt aangeroepen als de AI zelf besluit code uit te voeren (via
       // E2B). 'start' toont meteen welke code eraan komt; 'result' vult
       // daarna de uitvoer aan — zichtbaar in de chat zelf, niet verstopt.
@@ -2944,6 +3074,12 @@
         wrapTables(bubbleEl);
         return enhanceCodeBlocks(bubbleEl);
       },
+      // De AI kan de create_files-tool meerdere keren aanroepen binnen
+      // hetzelfde antwoord — dit geeft de volledige, verzamelde lijst
+      // terug zodat runTurn 'm bij het bericht kan opslaan (anders
+      // verdwijnen deze bestanden bij het herladen van de pagina, want ze
+      // zitten niet in de opgeslagen berichttekst zelf).
+      getToolFiles(){ return toolFilesList; },
       remove(){ wrap.remove(); }
     };
   }
@@ -2965,6 +3101,7 @@
     $('fExtendedThinking').checked = node ? !!node.extendedThinking : false;
     $('fCanExecuteCode').checked = node ? !!node.canExecuteCode : false;
     $('fAutoTestFiles').checked = node ? !!node.autoTestFiles : false;
+    $('fCreateFilesAsTool').checked = node ? !!node.createFilesAsTool : false;
     $('modalDeleteBtn').style.display = node ? 'block' : 'none';
     updateProviderHint();
     $('modalOverlay').style.display = 'flex';
@@ -3011,6 +3148,7 @@
     const extendedThinking = provider === 'anthropic' && $('fExtendedThinking').checked;
     const canExecuteCode = $('fCanExecuteCode').checked;
     const autoTestFiles = $('fAutoTestFiles').checked;
+    const createFilesAsTool = $('fCreateFilesAsTool').checked;
 
     if (!model) { $('fModel').focus(); return; }
     if (!apiKey) { $('fKey').focus(); return; }
@@ -3018,9 +3156,9 @@
 
     if (editingId) {
       const node = nodes.find(n => n.id === editingId);
-      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode, autoTestFiles });
+      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode, autoTestFiles, createFilesAsTool });
     } else {
-      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode, autoTestFiles, status: 'queued' });
+      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode, autoTestFiles, createFilesAsTool, status: 'queued' });
       if (activeIndex === -1) activeIndex = 0;
     }
     saveNodes();
@@ -3104,6 +3242,87 @@
     if (!conversation.length) { showToast('Nog geen gesprek om te exporteren.', 'info'); return; }
     const title = titleFromConversation(conversation).replace(/[^a-z0-9\-_. ]/gi, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'gesprek';
     downloadTextFile(title + '.md', conversationToMarkdown());
+  });
+
+  // ---------- Gesprek comprimeren (ouder deel samenvatten, tokens besparen) ----------
+
+  const COMPRESS_KEEP_LAST_MESSAGES = 6; // laatste 3 uitwisselingen blijven altijd letterlijk staan
+  const COMPRESS_MIN_MESSAGES = 10; // pas de moeite waard vanaf een zeker aantal berichten
+
+  function updateCompressButtonVisibility(){
+    $('compressConvBtn').style.display = conversation.length >= COMPRESS_MIN_MESSAGES ? 'inline-flex' : 'none';
+  }
+
+  let pendingCompressSplit = null; // hoeveel berichten straks vervangen worden, tot de gebruiker bevestigt
+
+  $('compressConvBtn').addEventListener('click', async () => {
+    const node = nodes[activeIndex];
+    if (!node) { showToast('Geen actieve AI om de samenvatting mee te maken.'); return; }
+    if (conversation.length < COMPRESS_MIN_MESSAGES) return;
+
+    const splitIndex = Math.max(0, conversation.length - COMPRESS_KEEP_LAST_MESSAGES);
+    const toSummarize = conversation.slice(0, splitIndex);
+    if (!toSummarize.length) return;
+    pendingCompressSplit = splitIndex;
+
+    const btn = $('compressConvBtn');
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = 'bezig...';
+    try {
+      const transcript = toSummarize.map(m => {
+        if (m.role === 'user') return 'Gebruiker: ' + m.content;
+        return (m.providerName || 'AI') + ': ' + m.content;
+      }).join('\n\n');
+      const prompt = 'Vat het volgende (oudere) deel van een gesprek compact samen. Behoud alle belangrijke beslissingen, genoemde bestandsnamen/code, en context die nodig is om het gesprek natuurlijk te laten doorlopen — dit vervangt namelijk de volledige geschiedenis hieronder, dus verlies geen cruciale informatie, maar wees wel bondig (dit is puur om tokens te besparen).\n\n' + transcript;
+      const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
+      $('compressPreviewText').value = (raw.text || '').trim();
+      $('compressPreviewSub').textContent = 'Het oudste ' + toSummarize.length + ' berichten worden vervangen door onderstaande samenvatting — de laatste ' + (conversation.length - splitIndex) + ' berichten blijven ongewijzigd staan. Dit bespaart aanzienlijk op tokens bij elk volgend bericht, maar details die niet in de samenvatting terechtkomen, gaan wel verloren.';
+      $('compressPreviewMsg').style.display = 'none';
+      $('compressPreviewOverlay').style.display = 'flex';
+    } catch (e) {
+      showToast('Samenvatten mislukt: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  });
+
+  $('compressPreviewCancelBtn').addEventListener('click', () => {
+    $('compressPreviewOverlay').style.display = 'none';
+    pendingCompressSplit = null;
+  });
+  $('compressPreviewOverlay').addEventListener('click', (e) => {
+    if (e.target === $('compressPreviewOverlay')) { $('compressPreviewOverlay').style.display = 'none'; pendingCompressSplit = null; }
+  });
+
+  $('compressPreviewConfirmBtn').addEventListener('click', () => {
+    const summary = $('compressPreviewText').value.trim();
+    if (!summary) {
+      $('compressPreviewMsg').textContent = 'De samenvatting mag niet leeg zijn.';
+      $('compressPreviewMsg').style.color = 'var(--danger)';
+      $('compressPreviewMsg').style.display = 'block';
+      return;
+    }
+    if (pendingCompressSplit === null || pendingCompressSplit > conversation.length) {
+      $('compressPreviewOverlay').style.display = 'none';
+      return;
+    }
+    const kept = conversation.slice(pendingCompressSplit);
+    // Als losse 'user'-bericht (met een korte, vaste AI-bevestiging erna)
+    // ingevoegd, zodat de gebruiker/AI-beurten voor élke provider — ook
+    // Gemini, die hier streng in is — netjes blijven afwisselen.
+    conversation = [
+      { role: 'user', content: '[Samenvatting van het eerdere deel van dit gesprek, ter vervanging van de volledige geschiedenis om tokens te besparen]\n\n' + summary },
+      { role: 'assistant', content: 'Begrepen — ik ga verder vanuit deze samenvatting.', providerName: 'Relay' },
+      ...kept
+    ];
+    pendingCompressSplit = null;
+    $('compressPreviewOverlay').style.display = 'none';
+    renderFullConversation();
+    updateCompressButtonVisibility();
+    saveCurrentConversation();
+    showToast('Gesprek gecomprimeerd — het oudere deel is nu een samenvatting.', 'info');
   });
 
   $('clearBtn').addEventListener('click', () => {
@@ -3260,7 +3479,8 @@
           const result = await callProvider(node, historyForThisCall, {
             signal: currentAbortController.signal,
             onThinkingChunk: (partial) => streamHandle.updateThinking(partial),
-            onToolEvent: (event) => streamHandle.toolRun(event)
+            onToolEvent: (event) => streamHandle.toolRun(event),
+            onToolFiles: (files) => streamHandle.toolFiles(files)
           }, (partial) => {
             partialSoFar = accumulated + partial;
             streamHandle.update(partialSoFar);
@@ -3286,10 +3506,17 @@
         node.status = 'done';
         node.coolDownUntil = null;
         currentAbortController = null;
+        // Bestanden die de AI via de create_files-tool doorgaf, apart
+        // meesturen bij het bericht (net als images/files bij een
+        // gebruikersbericht) — anders verdwijnen ze bij het herladen van
+        // de pagina, want ze zitten niet in de opgeslagen tekst zelf.
+        const toolFiles = streamHandle.getToolFiles();
+        const assistantMsg = { role: 'assistant', content: replyText, providerName: node.name };
+        if (toolFiles && toolFiles.length) assistantMsg.toolFiles = toolFiles;
         if (partialEntryIndex === -1) {
-          conversation.push({ role: 'assistant', content: replyText, providerName: node.name });
+          conversation.push(assistantMsg);
         } else {
-          conversation[partialEntryIndex] = { role: 'assistant', content: replyText, providerName: node.name };
+          conversation[partialEntryIndex] = assistantMsg;
         }
         renderNodes();
         sending = false;
@@ -3297,6 +3524,7 @@
         saveCurrentConversation();
         autoUpdateMemory(node, lastUserText, replyText);
         if (isFirstExchangeOfConversation) maybeGenerateConversationTitle(node, currentConvId, lastUserText, replyText);
+        updateCompressButtonVisibility();
         return;
       } catch (err) {
         currentAbortController = null;
@@ -3306,10 +3534,13 @@
           const finalText = partialSoFar.trim() || '(gestopt)';
           streamHandle.finish(finalText);
           node.status = 'done';
+          const toolFilesOnStop = streamHandle.getToolFiles();
+          const stoppedMsg = { role: 'assistant', content: finalText, providerName: node.name };
+          if (toolFilesOnStop && toolFilesOnStop.length) stoppedMsg.toolFiles = toolFilesOnStop;
           if (partialEntryIndex === -1) {
-            conversation.push({ role: 'assistant', content: finalText, providerName: node.name });
+            conversation.push(stoppedMsg);
           } else {
-            conversation[partialEntryIndex] = { role: 'assistant', content: finalText, providerName: node.name };
+            conversation[partialEntryIndex] = stoppedMsg;
           }
           renderNodes();
           sending = false;
@@ -3411,6 +3642,8 @@
   // ---------- Code laten uitvoeren door de AI zelf (via E2B) ----------
 
   const RUN_CODE_TOOL_DESCRIPTION = 'Voer een stuk code uit in een geïsoleerde, TIJDELIJKE sandbox en krijg de uitvoer (stdout/stderr/resultaat) terug. Gebruik dit UITSLUITEND om de daadwerkelijke logica van code te testen — bijvoorbeeld: controleren of een functie het juiste resultaat geeft, een berekening maken, een algoritme verifiëren, of een foutmelding reproduceren.\n\nGEBRUIK DIT NIET om een project op te bouwen of bestanden/mappen aan te maken (bv. via mkdir, touch, of bestanden wegschrijven) — de sandbox is volledig geïsoleerd en tijdelijk: alles wat je hier aanmaakt verdwijnt meteen weer en bereikt de gebruiker nooit. Bestanden die de gebruiker daadwerkelijk moet krijgen, lever je gewoon aan zoals gebruikelijk: als code-blok met de bestandsnaam erboven in je antwoord zelf (die worden dan automatisch downloadbare bestanden voor de gebruiker) — niet door ze in de sandbox te construeren.';
+
+  const CREATE_FILES_TOOL_DESCRIPTION = 'Registreer hiermee ELK bestand dat je voor dit antwoord aanmaakt, met de EXACTE bestandsnaam (incl. pad, bv. src/app.py) en de volledige inhoud - in plaats van de naam alleen ergens in lopende tekst te noemen. Geef bij voorkeur ALLE bestanden van dit antwoord in EEN aanroep door (als een lijst), niet los per bestand. Gebruik dit voor elk bestand dat je voorstelt om aan te maken, ook als er maar een is.';
   const RUN_CODE_TOOL_LANGUAGES = ['python', 'javascript', 'typescript', 'r', 'java', 'bash'];
   const MAX_TOOL_ROUNDS = 5; // vangnet tegen een AI die zichzelf blijft herhalen
 
@@ -3420,6 +3653,20 @@
     } catch (e) {
       return { stdout: '', stderr: '', error: e.message, results: [] };
     }
+  }
+
+  // Verwerkt een create_files-aanroep: geen netwerkactie nodig (in
+  // tegenstelling tot run_code) — puur de opgegeven bestanden als chips
+  // tonen en een korte bevestiging teruggeven, zodat de AI weet dat het
+  // gelukt is en gewoon door kan gaan met de rest van het antwoord.
+  function handleCreateFilesToolCall(input, opts){
+    const files = Array.isArray(input.files) ? input.files
+      .filter(f => f && typeof f.path === 'string' && typeof f.content === 'string' && f.path.trim())
+      .map(f => ({ path: f.path.trim(), content: f.content }))
+      : [];
+    if (opts.onToolFiles && files.length) opts.onToolFiles(files);
+    if (!files.length) return 'Geen geldige bestanden ontvangen — verwacht een lijst met {path, content}.';
+    return files.length + ' bestand' + (files.length === 1 ? '' : 'en') + ' geregistreerd: ' + files.map(f => f.path).join(', ');
   }
 
   // Test na afloop van een antwoord de bestanden die de AI daadwerkelijk
@@ -3607,19 +3854,45 @@
         body.thinking = { type: 'enabled', budget_tokens: budget };
         body.max_tokens = Math.max(cap, budget + 1024);
       }
-      if (node.canExecuteCode) {
-        body.tools = [{
-          name: 'run_code',
-          description: RUN_CODE_TOOL_DESCRIPTION,
-          input_schema: {
-            type: 'object',
-            properties: {
-              language: { type: 'string', enum: RUN_CODE_TOOL_LANGUAGES },
-              code: { type: 'string', description: 'De volledige code om uit te voeren.' }
-            },
-            required: ['language', 'code']
-          }
-        }];
+      if (node.canExecuteCode || node.createFilesAsTool) {
+        body.tools = [];
+        if (node.canExecuteCode) {
+          body.tools.push({
+            name: 'run_code',
+            description: RUN_CODE_TOOL_DESCRIPTION,
+            input_schema: {
+              type: 'object',
+              properties: {
+                language: { type: 'string', enum: RUN_CODE_TOOL_LANGUAGES },
+                code: { type: 'string', description: 'De volledige code om uit te voeren.' }
+              },
+              required: ['language', 'code']
+            }
+          });
+        }
+        if (node.createFilesAsTool) {
+          body.tools.push({
+            name: 'create_files',
+            description: CREATE_FILES_TOOL_DESCRIPTION,
+            input_schema: {
+              type: 'object',
+              properties: {
+                files: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      path: { type: 'string', description: 'De volledige bestandsnaam, incl. pad (bv. src/app.py).' },
+                      content: { type: 'string', description: 'De volledige inhoud van het bestand.' }
+                    },
+                    required: ['path', 'content']
+                  }
+                }
+              },
+              required: ['files']
+            }
+          });
+        }
       }
       const res = await proxyFetch('https://api.anthropic.com/v1/messages', {
         'Content-Type': 'application/json',
@@ -3675,6 +3948,11 @@
           let input = {};
           try { input = JSON.parse(tc.inputJson || '{}'); } catch (e) { /* leeg object blijft staan */ }
           assistantBlocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input });
+          if (tc.name === 'create_files') {
+            const ack = handleCreateFilesToolCall(input, opts);
+            resultBlocks.push({ type: 'tool_result', tool_use_id: tc.id, content: ack });
+            continue;
+          }
           if (opts.onToolEvent) opts.onToolEvent({ phase: 'start', language: input.language, code: input.code });
           const execResult = await executeCodeViaE2B(input.language, input.code);
           if (opts.onToolEvent) opts.onToolEvent(Object.assign({ phase: 'result', language: input.language, code: input.code }, execResult));
@@ -3706,22 +3984,51 @@
         messages,
         stream: true
       };
-      if (node.canExecuteCode) {
-        body.tools = [{
-          type: 'function',
-          function: {
-            name: 'run_code',
-            description: RUN_CODE_TOOL_DESCRIPTION,
-            parameters: {
-              type: 'object',
-              properties: {
-                language: { type: 'string', enum: RUN_CODE_TOOL_LANGUAGES },
-                code: { type: 'string', description: 'De volledige code om uit te voeren.' }
-              },
-              required: ['language', 'code']
+      if (node.canExecuteCode || node.createFilesAsTool) {
+        body.tools = [];
+        if (node.canExecuteCode) {
+          body.tools.push({
+            type: 'function',
+            function: {
+              name: 'run_code',
+              description: RUN_CODE_TOOL_DESCRIPTION,
+              parameters: {
+                type: 'object',
+                properties: {
+                  language: { type: 'string', enum: RUN_CODE_TOOL_LANGUAGES },
+                  code: { type: 'string', description: 'De volledige code om uit te voeren.' }
+                },
+                required: ['language', 'code']
+              }
             }
-          }
-        }];
+          });
+        }
+        if (node.createFilesAsTool) {
+          body.tools.push({
+            type: 'function',
+            function: {
+              name: 'create_files',
+              description: CREATE_FILES_TOOL_DESCRIPTION,
+              parameters: {
+                type: 'object',
+                properties: {
+                  files: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        path: { type: 'string', description: 'De volledige bestandsnaam, incl. pad (bv. src/app.py).' },
+                        content: { type: 'string', description: 'De volledige inhoud van het bestand.' }
+                      },
+                      required: ['path', 'content']
+                    }
+                  }
+                },
+                required: ['files']
+              }
+            }
+          });
+        }
       }
       const res = await proxyFetch(url, {
         'Content-Type': 'application/json',
@@ -3773,6 +4080,11 @@
         for (const tc of toolCalls) {
           let input = {};
           try { input = JSON.parse(tc.argsJson || '{}'); } catch (e) { /* leeg object blijft staan */ }
+          if (tc.name === 'create_files') {
+            const ack = handleCreateFilesToolCall(input, opts);
+            toolResultMsgs.push({ role: 'tool', tool_call_id: tc.id, content: ack });
+            continue;
+          }
           if (opts.onToolEvent) opts.onToolEvent({ phase: 'start', language: input.language, code: input.code });
           const execResult = await executeCodeViaE2B(input.language, input.code);
           if (opts.onToolEvent) opts.onToolEvent(Object.assign({ phase: 'result', language: input.language, code: input.code }, execResult));
@@ -3816,9 +4128,10 @@
         generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
       };
       if (opts.injectMemory !== false) body.systemInstruction = { parts: [{ text: buildSystemText() }] };
-      if (node.canExecuteCode) {
-        body.tools = [{
-          functionDeclarations: [{
+      if (node.canExecuteCode || node.createFilesAsTool) {
+        const functionDeclarations = [];
+        if (node.canExecuteCode) {
+          functionDeclarations.push({
             name: 'run_code',
             description: RUN_CODE_TOOL_DESCRIPTION,
             parameters: {
@@ -3829,8 +4142,32 @@
               },
               required: ['language', 'code']
             }
-          }]
-        }];
+          });
+        }
+        if (node.createFilesAsTool) {
+          functionDeclarations.push({
+            name: 'create_files',
+            description: CREATE_FILES_TOOL_DESCRIPTION,
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                files: {
+                  type: 'ARRAY',
+                  items: {
+                    type: 'OBJECT',
+                    properties: {
+                      path: { type: 'STRING', description: 'De volledige bestandsnaam, incl. pad (bv. src/app.py).' },
+                      content: { type: 'STRING', description: 'De volledige inhoud van het bestand.' }
+                    },
+                    required: ['path', 'content']
+                  }
+                }
+              },
+              required: ['files']
+            }
+          });
+        }
+        body.tools = [{ functionDeclarations }];
       }
       const res = await proxyFetch(url, { 'Content-Type': 'application/json' }, body, opts.signal);
       if (!res.ok) {
@@ -3868,6 +4205,11 @@
         for (const fc of functionCalls) {
           const input = fc.args || {};
           modelParts.push({ functionCall: fc });
+          if (fc.name === 'create_files') {
+            const ack = handleCreateFilesToolCall(input, opts);
+            responseParts.push({ functionResponse: { name: fc.name, response: { result: ack } } });
+            continue;
+          }
           if (opts.onToolEvent) opts.onToolEvent({ phase: 'start', language: input.language, code: input.code });
           const execResult = await executeCodeViaE2B(input.language, input.code);
           if (opts.onToolEvent) opts.onToolEvent(Object.assign({ phase: 'result', language: input.language, code: input.code }, execResult));
