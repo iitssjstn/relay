@@ -3410,7 +3410,7 @@
 
   // ---------- Code laten uitvoeren door de AI zelf (via E2B) ----------
 
-  const RUN_CODE_TOOL_DESCRIPTION = 'Voer een stuk code uit in een geïsoleerde sandbox en krijg de uitvoer (stdout/stderr/resultaat) terug. Gebruik dit om code die je net hebt geschreven ook echt te testen voordat je verdergaat — bijvoorbeeld om te controleren of een script werkt, een berekening te maken, of een fout op te sporen.';
+  const RUN_CODE_TOOL_DESCRIPTION = 'Voer een stuk code uit in een geïsoleerde, TIJDELIJKE sandbox en krijg de uitvoer (stdout/stderr/resultaat) terug. Gebruik dit UITSLUITEND om de daadwerkelijke logica van code te testen — bijvoorbeeld: controleren of een functie het juiste resultaat geeft, een berekening maken, een algoritme verifiëren, of een foutmelding reproduceren.\n\nGEBRUIK DIT NIET om een project op te bouwen of bestanden/mappen aan te maken (bv. via mkdir, touch, of bestanden wegschrijven) — de sandbox is volledig geïsoleerd en tijdelijk: alles wat je hier aanmaakt verdwijnt meteen weer en bereikt de gebruiker nooit. Bestanden die de gebruiker daadwerkelijk moet krijgen, lever je gewoon aan zoals gebruikelijk: als code-blok met de bestandsnaam erboven in je antwoord zelf (die worden dan automatisch downloadbare bestanden voor de gebruiker) — niet door ze in de sandbox te construeren.';
   const RUN_CODE_TOOL_LANGUAGES = ['python', 'javascript', 'typescript', 'r', 'java', 'bash'];
   const MAX_TOOL_ROUNDS = 5; // vangnet tegen een AI die zichzelf blijft herhalen
 
