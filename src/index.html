@@ -987,6 +987,28 @@
   }
   .thinking-block.open .thinking-body{ display:block; }
 
+  .tool-run-block{
+    margin-bottom:8px; border: 1px solid var(--border-soft); border-radius:8px;
+    overflow:hidden; background: var(--panel-2);
+  }
+  .tool-run-header{
+    display:flex; align-items:center; gap:7px;
+    padding: 7px 11px; font-size:11.5px; color: var(--text-faint);
+    font-family: var(--font-mono); border-bottom: 1px solid var(--border-soft);
+  }
+  .tool-run-code{
+    margin:0; padding:9px 11px; font-family: var(--font-mono); font-size:12px;
+    line-height:1.5; color: var(--text-dim); white-space:pre-wrap; word-break:break-word;
+    max-height:180px; overflow-y:auto;
+  }
+  .tool-run-output{ border-top: 1px solid var(--border-soft); padding:9px 11px; }
+  .tool-run-output pre{
+    margin:0; font-family: var(--font-mono); font-size:12px; line-height:1.5;
+    white-space:pre-wrap; word-break:break-word; color: var(--text-dim);
+  }
+  .tool-run-output pre.stderr{ color: var(--danger); }
+  .tool-run-output pre + pre{ margin-top:6px; }
+
   .key-row{ display:flex; gap:6px; }
   .key-row input{ flex:1; }
   .key-row button{
@@ -1236,6 +1258,14 @@
         Extended thinking (Anthropic)
       </label>
       <div class="field-hint">Toont het redeneerproces van het model als inklapbaar "Nagedacht voor Xs"-blokje boven het antwoord. Werkt alleen bij Claude-modellen die dit ondersteunen (bv. Claude 4-serie), en kost extra tokens/tijd.</div>
+    </div>
+
+    <div class="field">
+      <label class="checkbox-label">
+        <input id="fCanExecuteCode" type="checkbox">
+        Code zelf laten uitvoeren (E2B)
+      </label>
+      <div class="field-hint">Deze AI mag code die ze schrijft zelf laten draaien in de E2B-sandbox, het resultaat zien, en er zo nodig op reageren — automatisch, zonder dat jij op "uitvoeren" hoeft te klikken. Vereist een E2B API-key onder je accountmenu.</div>
     </div>
 
     <div class="copyright-note">
@@ -2713,6 +2743,7 @@
           </button>
           <div class="thinking-body"><div class="thinking-text"></div></div>
         </div>
+        <div class="tool-run-list"></div>
         <div class="bubble streaming-plain"><span class="stream-text"><span class="typing"><span></span><span></span><span></span></span></span><span class="stream-cursor"></span></div>
       </div>
     `;
@@ -2724,6 +2755,8 @@
     const thinkLabel = wrap.querySelector('.thinking-label');
     const thinkText = wrap.querySelector('.thinking-text');
     const thinkToggle = wrap.querySelector('.thinking-toggle');
+    const toolRunList = wrap.querySelector('.tool-run-list');
+    let currentToolBlock = null;
     let thinkingStartedAt = null;
     let thinkingOpen = false;
     thinkToggle.addEventListener('click', () => {
@@ -2790,6 +2823,35 @@
         thinkText.textContent = text;
         if (autoScrollToBottom) scrollMessagesToBottom();
       },
+      // Wordt aangeroepen als de AI zelf besluit code uit te voeren (via
+      // E2B). 'start' toont meteen welke code eraan komt; 'result' vult
+      // daarna de uitvoer aan — zichtbaar in de chat zelf, niet verstopt.
+      toolRun(event){
+        if (event.phase === 'start') {
+          const block = document.createElement('div');
+          block.className = 'tool-run-block';
+          block.innerHTML = `
+            <div class="tool-run-header"><span class="artifact-run-spinner"></span> Code uitvoeren (${escapeHtml(event.language || '')})...</div>
+            <pre class="tool-run-code">${escapeHtml(event.code || '')}</pre>
+          `;
+          toolRunList.appendChild(block);
+          currentToolBlock = block;
+        } else if (event.phase === 'result') {
+          const block = currentToolBlock || toolRunList.lastElementChild;
+          if (!block) return;
+          block.querySelector('.tool-run-header').textContent = 'Code uitgevoerd (' + (event.language || '') + ')';
+          let html = '';
+          if (event.stdout) html += '<pre>' + escapeHtml(event.stdout) + '</pre>';
+          if (event.results && event.results.length) html += '<pre>' + escapeHtml(event.results.join('\n')) + '</pre>';
+          if (event.stderr) html += '<pre class="stderr">' + escapeHtml(event.stderr) + '</pre>';
+          if (event.error) html += '<pre class="stderr">' + escapeHtml(event.error) + '</pre>';
+          const outEl = document.createElement('div');
+          outEl.className = 'tool-run-output';
+          outEl.innerHTML = html || '<pre>(geen uitvoer)</pre>';
+          block.appendChild(outEl);
+        }
+        if (autoScrollToBottom) scrollMessagesToBottom();
+      },
       finish(text){
         pendingText = null;
         bubbleEl.classList.remove('streaming-plain');
@@ -2818,6 +2880,7 @@
     $('fMaxTokens').value = node ? node.maxTokens : PROVIDER_DEFAULTS['anthropic'].maxTokens;
     $('fMaxOutput').value = node ? node.maxOutput : PROVIDER_DEFAULTS['anthropic'].maxOutput;
     $('fExtendedThinking').checked = node ? !!node.extendedThinking : false;
+    $('fCanExecuteCode').checked = node ? !!node.canExecuteCode : false;
     $('modalDeleteBtn').style.display = node ? 'block' : 'none';
     updateProviderHint();
     $('modalOverlay').style.display = 'flex';
@@ -2862,6 +2925,7 @@
     const maxTokens = parseInt($('fMaxTokens').value, 10) || PROVIDER_DEFAULTS[provider].maxTokens;
     const maxOutput = parseInt($('fMaxOutput').value, 10) || PROVIDER_DEFAULTS[provider].maxOutput;
     const extendedThinking = provider === 'anthropic' && $('fExtendedThinking').checked;
+    const canExecuteCode = $('fCanExecuteCode').checked;
 
     if (!model) { $('fModel').focus(); return; }
     if (!apiKey) { $('fKey').focus(); return; }
@@ -2869,9 +2933,9 @@
 
     if (editingId) {
       const node = nodes.find(n => n.id === editingId);
-      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking });
+      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode });
     } else {
-      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, status: 'queued' });
+      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode, status: 'queued' });
       if (activeIndex === -1) activeIndex = 0;
     }
     saveNodes();
@@ -3073,7 +3137,8 @@
             : conversation;
           const result = await callProvider(node, historyForThisCall, {
             signal: currentAbortController.signal,
-            onThinkingChunk: (partial) => streamHandle.updateThinking(partial)
+            onThinkingChunk: (partial) => streamHandle.updateThinking(partial),
+            onToolEvent: (event) => streamHandle.toolRun(event)
           }, (partial) => {
             partialSoFar = accumulated + partial;
             streamHandle.update(partialSoFar);
@@ -3212,6 +3277,29 @@
     return text;
   }
 
+  // ---------- Code laten uitvoeren door de AI zelf (via E2B) ----------
+
+  const RUN_CODE_TOOL_DESCRIPTION = 'Voer een stuk code uit in een geïsoleerde sandbox en krijg de uitvoer (stdout/stderr/resultaat) terug. Gebruik dit om code die je net hebt geschreven ook echt te testen voordat je verdergaat — bijvoorbeeld om te controleren of een script werkt, een berekening te maken, of een fout op te sporen.';
+  const RUN_CODE_TOOL_LANGUAGES = ['python', 'javascript', 'typescript', 'r', 'java', 'bash'];
+  const MAX_TOOL_ROUNDS = 5; // vangnet tegen een AI die zichzelf blijft herhalen
+
+  async function executeCodeViaE2B(language, code){
+    try {
+      return await apiFetch('/api/execute', { method: 'POST', body: { language, content: code } });
+    } catch (e) {
+      return { stdout: '', stderr: '', error: e.message, results: [] };
+    }
+  }
+
+  function formatToolResultText(execResult){
+    const parts = [];
+    if (execResult.stdout) parts.push('STDOUT:\n' + execResult.stdout);
+    if (execResult.results && execResult.results.length) parts.push('RESULTAAT:\n' + execResult.results.join('\n'));
+    if (execResult.stderr) parts.push('STDERR:\n' + execResult.stderr);
+    if (execResult.error) parts.push('FOUT:\n' + execResult.error);
+    return parts.length ? parts.join('\n\n') : '(geen uitvoer)';
+  }
+
   function anthropicMessageContent(m){
     const text = effectiveMessageText(m);
     if (!m.images || !m.images.length) return text;
@@ -3343,133 +3431,293 @@
 
   async function callAnthropic(node, history, opts, onChunk){
     opts = opts || {};
-    const body = {
-      model: node.model,
-      max_tokens: node.maxOutput || 4096,
-      messages: history.map(m => ({ role: m.role, content: anthropicMessageContent(m) })),
-      stream: true
-    };
-    if (opts.injectMemory !== false) body.system = buildSystemText();
-    if (node.extendedThinking) {
-      // budget moet ruim onder max_tokens blijven (Anthropic-eis: minimaal
-      // 1024, en de uiteindelijke tekst heeft ook nog eigen ruimte nodig).
-      const cap = node.maxOutput || 4096;
-      const budget = Math.max(1024, Math.min(10000, Math.floor(cap * 0.6)));
-      body.thinking = { type: 'enabled', budget_tokens: budget };
-      body.max_tokens = Math.max(cap, budget + 1024);
-    }
-    const res = await proxyFetch('https://api.anthropic.com/v1/messages', {
-      'Content-Type': 'application/json',
-      'x-api-key': node.apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    }, body, opts.signal);
-    const rlInfo1 = extractRateLimitInfo(res, 'anthropic');
-    if (rlInfo1) node.rateLimitInfo = rlInfo1;
-    if (!res.ok) {
-      const bodyText = await res.text();
-      if (isContextLimitError('anthropic', res.status, bodyText)) {
-        const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+    let workingHistory = history.slice();
+    let combinedText = '';
+    let combinedThinking = '';
+    let toolRounds = 0;
+
+    while (true) {
+      const body = {
+        model: node.model,
+        max_tokens: node.maxOutput || 4096,
+        messages: workingHistory.map(m => m.__rawContent
+          ? { role: m.role, content: m.__rawContent }
+          : { role: m.role, content: anthropicMessageContent(m) }),
+        stream: true
+      };
+      if (opts.injectMemory !== false) body.system = buildSystemText();
+      if (node.extendedThinking) {
+        // budget moet ruim onder max_tokens blijven (Anthropic-eis: minimaal
+        // 1024, en de uiteindelijke tekst heeft ook nog eigen ruimte nodig).
+        const cap = node.maxOutput || 4096;
+        const budget = Math.max(1024, Math.min(10000, Math.floor(cap * 0.6)));
+        body.thinking = { type: 'enabled', budget_tokens: budget };
+        body.max_tokens = Math.max(cap, budget + 1024);
       }
-      if (isRateLimitError(res.status, bodyText)) {
-        const e = new Error('rate limit'); e.isRateLimit = true; throw e;
+      if (node.canExecuteCode) {
+        body.tools = [{
+          name: 'run_code',
+          description: RUN_CODE_TOOL_DESCRIPTION,
+          input_schema: {
+            type: 'object',
+            properties: {
+              language: { type: 'string', enum: RUN_CODE_TOOL_LANGUAGES },
+              code: { type: 'string', description: 'De volledige code om uit te voeren.' }
+            },
+            required: ['language', 'code']
+          }
+        }];
       }
-      throw new Error(parseErrMsg(bodyText, res.status));
-    }
-    let full = '';
-    let thinkingFull = '';
-    let stopReason = null;
-    await streamSSE(res, (evt) => {
-      if (evt.type === 'content_block_delta' && evt.delta) {
-        if (evt.delta.type === 'thinking_delta' && typeof evt.delta.thinking === 'string') {
-          thinkingFull += evt.delta.thinking;
-          if (opts.onThinkingChunk) opts.onThinkingChunk(thinkingFull);
-        } else if (typeof evt.delta.text === 'string') {
-          full += evt.delta.text;
-          if (onChunk) onChunk(full);
+      const res = await proxyFetch('https://api.anthropic.com/v1/messages', {
+        'Content-Type': 'application/json',
+        'x-api-key': node.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      }, body, opts.signal);
+      const rlInfo1 = extractRateLimitInfo(res, 'anthropic');
+      if (rlInfo1) node.rateLimitInfo = rlInfo1;
+      if (!res.ok) {
+        const bodyText = await res.text();
+        if (isContextLimitError('anthropic', res.status, bodyText)) {
+          const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
         }
-      } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
-        stopReason = evt.delta.stop_reason;
-      } else if (evt.type === 'error' && evt.error) {
-        throw new Error(evt.error.message || 'Streamingfout');
+        if (isRateLimitError(res.status, bodyText)) {
+          const e = new Error('rate limit'); e.isRateLimit = true; throw e;
+        }
+        throw new Error(parseErrMsg(bodyText, res.status));
       }
-    });
-    return { text: full, thinking: thinkingFull, truncated: stopReason === 'max_tokens' };
+      let full = '';
+      let thinkingFull = '';
+      let stopReason = null;
+      const toolBlocks = {}; // index -> {id, name, inputJson}
+      await streamSSE(res, (evt) => {
+        if (evt.type === 'content_block_start' && evt.content_block && evt.content_block.type === 'tool_use') {
+          toolBlocks[evt.index] = { id: evt.content_block.id, name: evt.content_block.name, inputJson: '' };
+        } else if (evt.type === 'content_block_delta' && evt.delta) {
+          if (evt.delta.type === 'thinking_delta' && typeof evt.delta.thinking === 'string') {
+            thinkingFull += evt.delta.thinking;
+            if (opts.onThinkingChunk) opts.onThinkingChunk(combinedThinking + thinkingFull);
+          } else if (evt.delta.type === 'input_json_delta' && toolBlocks[evt.index]) {
+            toolBlocks[evt.index].inputJson += evt.delta.partial_json || '';
+          } else if (typeof evt.delta.text === 'string') {
+            full += evt.delta.text;
+            if (onChunk) onChunk(combinedText + full);
+          }
+        } else if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
+          stopReason = evt.delta.stop_reason;
+        } else if (evt.type === 'error' && evt.error) {
+          throw new Error(evt.error.message || 'Streamingfout');
+        }
+      });
+      combinedText += full;
+      combinedThinking += thinkingFull;
+
+      const toolCalls = Object.values(toolBlocks);
+      if (stopReason === 'tool_use' && toolCalls.length && toolRounds < MAX_TOOL_ROUNDS) {
+        toolRounds++;
+        const assistantBlocks = [];
+        if (full) assistantBlocks.push({ type: 'text', text: full });
+        const resultBlocks = [];
+        for (const tc of toolCalls) {
+          let input = {};
+          try { input = JSON.parse(tc.inputJson || '{}'); } catch (e) { /* leeg object blijft staan */ }
+          assistantBlocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input });
+          if (opts.onToolEvent) opts.onToolEvent({ phase: 'start', language: input.language, code: input.code });
+          const execResult = await executeCodeViaE2B(input.language, input.code);
+          if (opts.onToolEvent) opts.onToolEvent(Object.assign({ phase: 'result', language: input.language, code: input.code }, execResult));
+          resultBlocks.push({ type: 'tool_result', tool_use_id: tc.id, content: formatToolResultText(execResult) });
+        }
+        workingHistory = workingHistory.concat([
+          { role: 'assistant', __rawContent: assistantBlocks },
+          { role: 'user', __rawContent: resultBlocks }
+        ]);
+        continue; // nieuwe ronde: de AI ziet het resultaat en kan verdergaan
+      }
+
+      return { text: combinedText, thinking: combinedThinking, truncated: stopReason === 'max_tokens' };
+    }
   }
 
   async function callOpenAI(node, history, url, opts, onChunk){
     opts = opts || {};
-    const messages = history.map(m => ({ role: m.role, content: openAIMessageContent(m) }));
-    if (opts.injectMemory !== false) messages.unshift({ role: 'system', content: buildSystemText() });
-    const res = await proxyFetch(url, {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + node.apiKey
-    }, {
-      model: node.model,
-      max_tokens: node.maxOutput || 4096,
-      messages,
-      stream: true
-    }, opts.signal);
-    const rlInfo2 = extractRateLimitInfo(res, 'openai');
-    if (rlInfo2) node.rateLimitInfo = rlInfo2;
-    if (!res.ok) {
-      const bodyText = await res.text();
-      if (isContextLimitError('openai', res.status, bodyText)) {
-        const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+    let workingHistory = history.slice();
+    let combinedText = '';
+    let toolRounds = 0;
+
+    while (true) {
+      const messages = workingHistory.map(m => m.__rawMsg || { role: m.role, content: openAIMessageContent(m) });
+      if (opts.injectMemory !== false) messages.unshift({ role: 'system', content: buildSystemText() });
+      const body = {
+        model: node.model,
+        max_tokens: node.maxOutput || 4096,
+        messages,
+        stream: true
+      };
+      if (node.canExecuteCode) {
+        body.tools = [{
+          type: 'function',
+          function: {
+            name: 'run_code',
+            description: RUN_CODE_TOOL_DESCRIPTION,
+            parameters: {
+              type: 'object',
+              properties: {
+                language: { type: 'string', enum: RUN_CODE_TOOL_LANGUAGES },
+                code: { type: 'string', description: 'De volledige code om uit te voeren.' }
+              },
+              required: ['language', 'code']
+            }
+          }
+        }];
       }
-      if (isRateLimitError(res.status, bodyText)) {
-        const e = new Error('rate limit'); e.isRateLimit = true; throw e;
+      const res = await proxyFetch(url, {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + node.apiKey
+      }, body, opts.signal);
+      const rlInfo2 = extractRateLimitInfo(res, 'openai');
+      if (rlInfo2) node.rateLimitInfo = rlInfo2;
+      if (!res.ok) {
+        const bodyText = await res.text();
+        if (isContextLimitError('openai', res.status, bodyText)) {
+          const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+        }
+        if (isRateLimitError(res.status, bodyText)) {
+          const e = new Error('rate limit'); e.isRateLimit = true; throw e;
+        }
+        throw new Error(parseErrMsg(bodyText, res.status));
       }
-      throw new Error(parseErrMsg(bodyText, res.status));
+      let full = '';
+      let finishReason = null;
+      const toolCallsByIndex = {}; // index -> {id, name, argsJson}
+      await streamSSE(res, (evt) => {
+        const delta = evt.choices?.[0]?.delta;
+        if (delta && typeof delta.content === 'string' && delta.content) {
+          full += delta.content;
+          if (onChunk) onChunk(combinedText + full);
+        }
+        if (delta && Array.isArray(delta.tool_calls)) {
+          delta.tool_calls.forEach(tc => {
+            const idx = tc.index || 0;
+            if (!toolCallsByIndex[idx]) toolCallsByIndex[idx] = { id: '', name: '', argsJson: '' };
+            if (tc.id) toolCallsByIndex[idx].id = tc.id;
+            if (tc.function?.name) toolCallsByIndex[idx].name += tc.function.name;
+            if (tc.function?.arguments) toolCallsByIndex[idx].argsJson += tc.function.arguments;
+          });
+        }
+        if (evt.choices?.[0]?.finish_reason) finishReason = evt.choices[0].finish_reason;
+      });
+      combinedText += full;
+
+      const toolCalls = Object.values(toolCallsByIndex);
+      if (finishReason === 'tool_calls' && toolCalls.length && toolRounds < MAX_TOOL_ROUNDS) {
+        toolRounds++;
+        const assistantMsg = {
+          role: 'assistant',
+          content: full || null,
+          tool_calls: toolCalls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.argsJson } }))
+        };
+        const toolResultMsgs = [];
+        for (const tc of toolCalls) {
+          let input = {};
+          try { input = JSON.parse(tc.argsJson || '{}'); } catch (e) { /* leeg object blijft staan */ }
+          if (opts.onToolEvent) opts.onToolEvent({ phase: 'start', language: input.language, code: input.code });
+          const execResult = await executeCodeViaE2B(input.language, input.code);
+          if (opts.onToolEvent) opts.onToolEvent(Object.assign({ phase: 'result', language: input.language, code: input.code }, execResult));
+          toolResultMsgs.push({ role: 'tool', tool_call_id: tc.id, content: formatToolResultText(execResult) });
+        }
+        workingHistory = workingHistory.concat([
+          { role: 'assistant', __rawMsg: assistantMsg },
+          ...toolResultMsgs.map(m => ({ role: 'tool', __rawMsg: m }))
+        ]);
+        continue;
+      }
+
+      return { text: combinedText, truncated: finishReason === 'length' };
     }
-    let full = '';
-    let finishReason = null;
-    await streamSSE(res, (evt) => {
-      const delta = evt.choices?.[0]?.delta?.content;
-      if (typeof delta === 'string' && delta) {
-        full += delta;
-        if (onChunk) onChunk(full);
-      }
-      if (evt.choices?.[0]?.finish_reason) finishReason = evt.choices[0].finish_reason;
-    });
-    return { text: full, truncated: finishReason === 'length' };
   }
 
   async function callGoogle(node, history, opts, onChunk){
     opts = opts || {};
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(node.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(node.apiKey)}`;
-    const contents = history.map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: googleMessageParts(m)
-    }));
-    const body = {
-      contents,
-      generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
-    };
-    if (opts.injectMemory !== false) body.systemInstruction = { parts: [{ text: buildSystemText() }] };
-    const res = await proxyFetch(url, { 'Content-Type': 'application/json' }, body, opts.signal);
-    if (!res.ok) {
-      const bodyText = await res.text();
-      if (isContextLimitError('google', res.status, bodyText)) {
-        const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+    let workingHistory = history.slice();
+    let combinedText = '';
+    let toolRounds = 0;
+
+    while (true) {
+      const contents = workingHistory.map(m => m.__rawContent
+        ? { role: m.role, parts: m.__rawContent }
+        : { role: m.role === 'assistant' ? 'model' : 'user', parts: googleMessageParts(m) });
+      const body = {
+        contents,
+        generationConfig: { maxOutputTokens: node.maxOutput || 4096 }
+      };
+      if (opts.injectMemory !== false) body.systemInstruction = { parts: [{ text: buildSystemText() }] };
+      if (node.canExecuteCode) {
+        body.tools = [{
+          functionDeclarations: [{
+            name: 'run_code',
+            description: RUN_CODE_TOOL_DESCRIPTION,
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                language: { type: 'STRING', enum: RUN_CODE_TOOL_LANGUAGES },
+                code: { type: 'STRING', description: 'De volledige code om uit te voeren.' }
+              },
+              required: ['language', 'code']
+            }
+          }]
+        }];
       }
-      if (isRateLimitError(res.status, bodyText)) {
-        const e = new Error('rate limit'); e.isRateLimit = true; throw e;
+      const res = await proxyFetch(url, { 'Content-Type': 'application/json' }, body, opts.signal);
+      if (!res.ok) {
+        const bodyText = await res.text();
+        if (isContextLimitError('google', res.status, bodyText)) {
+          const e = new Error('contextlimiet'); e.isContextLimit = true; throw e;
+        }
+        if (isRateLimitError(res.status, bodyText)) {
+          const e = new Error('rate limit'); e.isRateLimit = true; throw e;
+        }
+        throw new Error(parseErrMsg(bodyText, res.status));
       }
-      throw new Error(parseErrMsg(bodyText, res.status));
+      let full = '';
+      let finishReason = null;
+      const functionCalls = []; // Gemini stuurt een complete functionCall in één keer, niet stukje bij beetje
+      await streamSSE(res, (evt) => {
+        const parts = evt.candidates?.[0]?.content?.parts || [];
+        parts.forEach(p => {
+          if (typeof p.text === 'string' && p.text) {
+            full += p.text;
+            if (onChunk) onChunk(combinedText + full);
+          } else if (p.functionCall) {
+            functionCalls.push(p.functionCall);
+          }
+        });
+        if (evt.candidates?.[0]?.finishReason) finishReason = evt.candidates[0].finishReason;
+      });
+      combinedText += full;
+
+      if (functionCalls.length && toolRounds < MAX_TOOL_ROUNDS) {
+        toolRounds++;
+        const modelParts = [];
+        if (full) modelParts.push({ text: full });
+        const responseParts = [];
+        for (const fc of functionCalls) {
+          const input = fc.args || {};
+          modelParts.push({ functionCall: fc });
+          if (opts.onToolEvent) opts.onToolEvent({ phase: 'start', language: input.language, code: input.code });
+          const execResult = await executeCodeViaE2B(input.language, input.code);
+          if (opts.onToolEvent) opts.onToolEvent(Object.assign({ phase: 'result', language: input.language, code: input.code }, execResult));
+          responseParts.push({ functionResponse: { name: fc.name, response: { result: formatToolResultText(execResult) } } });
+        }
+        workingHistory = workingHistory.concat([
+          { role: 'model', __rawContent: modelParts },
+          { role: 'user', __rawContent: responseParts }
+        ]);
+        continue;
+      }
+
+      return { text: combinedText, truncated: finishReason === 'MAX_TOKENS' };
     }
-    let full = '';
-    let finishReason = null;
-    await streamSSE(res, (evt) => {
-      const parts = evt.candidates?.[0]?.content?.parts || [];
-      const deltaText = parts.map(p => p.text || '').join('');
-      if (deltaText) {
-        full += deltaText;
-        if (onChunk) onChunk(full);
-      }
-      if (evt.candidates?.[0]?.finishReason) finishReason = evt.candidates[0].finishReason;
-    });
-    return { text: full, truncated: finishReason === 'MAX_TOKENS' };
   }
 
   function parseErrMsg(bodyText, status){
