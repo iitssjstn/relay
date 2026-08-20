@@ -39,39 +39,6 @@ Vanuit hetzelfde beheerscherm kun je:
 De registratiecode wordt nooit in platte tekst opgeslagen — alleen de
 bcrypt-hash ervan, in de database.
 
-## Automatisch bouwen via GitHub Actions
-
-Dit repo bevat een workflow (`.github/workflows/docker-publish.yml`)
-die bij elke push naar `main` automatisch een Docker image bouwt en
-publiceert naar GitHub Container Registry (`ghcr.io`). Daardoor hoef
-je op de VPS nooit lokaal te bouwen — je pullt gewoon het kant-en-klare
-image.
-
-**Eenmalig instellen, nadat je dit naar je eigen GitHub-repo hebt gepusht:**
-
-1. Push naar `main` — de workflow draait automatisch (te volgen onder
-   het tabblad *Actions* van je repo) en publiceert
-   `ghcr.io/<jouw-gebruikersnaam>/<repo-naam>:latest`.
-2. Ga naar je GitHub-profiel → *Packages* → het package dat net is
-   aangemaakt → *Package settings* → zet zichtbaarheid op **Public**
-   (anders moet de VPS ook inloggen bij ghcr.io om te kunnen pullen).
-3. Pas in `docker-compose.yml` de regel `image:` aan naar
-   `ghcr.io/<jouw-gebruikersnaam>/<repo-naam>:latest` (staat al goed
-   als je gebruikersnaam/repo `iitssjstn/relay` is).
-
-**Updaten op de VPS gaat vanaf dan zo:**
-
-```bash
-docker compose pull relay
-docker compose up -d relay
-```
-
-Geen `git pull`, geen rebuild — je haalt gewoon de laatste gepubliceerde
-image binnen. Accounts en gesprekken blijven staan, die leven in de
-`relay-data`-map (zie hieronder), niet in het image.
-
-## Starten (achter Nginx Proxy Manager)
-
 **Stap 1 — `docker-compose.yml`.**
 
 ```yaml
