@@ -3104,6 +3104,11 @@
     // Vóór er eventueel tussentijds een concept-antwoord in de geschiedenis
     // belandt (zie hieronder), anders raakt deze controle in de war.
     const isFirstExchangeOfConversation = conversation.length === 1;
+    // Zodra dit true wordt, is er minstens één keer écht een verzoek naar
+    // een AI verstuurd — gebruikt hieronder om te voorkomen dat een
+    // (mogelijk onjuiste) schatting van de contextgrootte de hele ketting
+    // blokkeert zonder dat er ook maar één keer echt geprobeerd is.
+    let anyRealAttemptMade = false;
 
     let attempts = 0;
     while (attempts < nodes.length) {
@@ -3120,8 +3125,14 @@
 
       const estTokens = conversationTokenEstimate();
 
-      // Pre-emptively hand off if we're clearly over this node's budget before even calling it.
-      if (estTokens > node.maxTokens * 0.92) {
+      // Pre-emptively hand off if we're clearly over this node's budget
+      // before even calling it — TENZIJ dit de laatste beschikbare AI in
+      // de ketting is en er nog nooit écht een verzoek is verstuurd: dan
+      // is de schatting het enige signaal, en die kan gewoon fout zitten.
+      // Liever één keer echt het antwoord van de provider zelf horen dan
+      // blind opgeven op basis van een ruwe inschatting.
+      const isLastAvailableNode = activeIndex + 1 >= nodes.length;
+      if (estTokens > node.maxTokens * 0.92 && !(isLastAvailableNode && !anyRealAttemptMade)) {
         const handedOff = handOffToNext(node, 'contextlimiet (geschat) bereikt vóór verzending');
         if (!handedOff) break;
         attempts++;
@@ -3131,6 +3142,7 @@
       node.status = 'active';
       renderNodes();
       const streamHandle = beginStreamingMessage(node.name);
+      anyRealAttemptMade = true;
 
       currentAbortController = new AbortController();
       let accumulated = '';
@@ -3269,6 +3281,12 @@
           continue;
         }
       }
+    }
+    // Geen enkele AI in de ketting heeft dit bericht kunnen verwerken —
+    // zonder deze melding stopt Relay hier stilzwijgend, zonder enige
+    // uitleg aan de gebruiker (behalve de losse handoff-regels erboven).
+    if (sending) {
+      addMessage('system', 'Geen enkele AI in je ketting kon dit bericht verwerken — allemaal overgeslagen wegens een (geschatte) contextlimiet, of allemaal met een fout teruggekomen. Probeer het gesprek in te korten, verhoog de "max context"-instelling van een AI in je ketting, of voeg een AI met een groter contextvenster toe.', { cls: 'err' });
     }
     sending = false;
     updateComposerState();
@@ -3787,7 +3805,16 @@
       const j = JSON.parse(bodyText);
       return (j.error && (j.error.message || j.error)) || j.message || ('HTTP ' + status);
     } catch {
-      return 'HTTP ' + status + (bodyText ? ' — ' + bodyText.slice(0, 140) : '');
+      const trimmed = (bodyText || '').trim();
+      // Sommige providers/tussenliggende proxies geven bij een storing een
+      // HTML-foutpagina terug (bv. een 502/504 van hun eigen loadbalancer)
+      // in plaats van een normaal API-antwoord. Ruwe HTML in de foutmelding
+      // dumpen is onleesbaar — geef dan liever een korte, duidelijke uitleg.
+      const looksLikeHtml = /^<(!DOCTYPE|html)/i.test(trimmed) || /^<[a-z][^>]*>/i.test(trimmed);
+      if (looksLikeHtml) {
+        return 'HTTP ' + status + ' — de provider gaf een technische foutpagina terug in plaats van een normaal antwoord (waarschijnlijk een tijdelijke storing bij de provider zelf).';
+      }
+      return 'HTTP ' + status + (trimmed ? ' — ' + trimmed.slice(0, 140) : '');
     }
   }
 
