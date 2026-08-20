@@ -2232,26 +2232,67 @@
       truncated = true;
     }
 
-    // Staat er aan het eind een codeblok dat nog niet is afgesloten (de
-    // AI is 'm nog aan het schrijven)? Toon dan niet de hele, groeiende
-    // ruwe code — dat voelt traag aan, alsof je moet wachten tot alles is
-    // langsgekomen. Toon in plaats daarvan een korte, oplopende teller;
-    // zodra het blok wél sluit, klapt het vanzelf samen tot het bekende
-    // bestandskaartje (via enhanceCodeBlocks, na renderMarkdownSafe).
+    // Elk codeblok dat eruitziet als een écht bestand (een genoemde
+    // bestandsnaam ervoor, of een herkende programmeertaal met meer dan
+    // 3 regels) tonen we tijdens het streamen niet als rauwe, groeiende
+    // tekst — dat geldt zowel voor het blok waar de AI middenin zit, als
+    // voor blokken die al wél zijn afgesloten maar waarna de AI nog
+    // doorschrijft (uitleg, of nóg een bestand). Zonder dat zou een net-
+    // afgesloten bestand terugspringen naar volledig zichtbare platte
+    // tekst tot het hele antwoord af is. Pas bij het echt afronden van
+    // het bericht (renderMarkdownSafe + enhanceCodeBlocks) worden het
+    // stuk voor stuk de bekende, inklapbare bestandskaartjes.
+    const NON_FILE_LANGS = ['', 'txt', 'text', 'plaintext', 'plain', 'output', 'console'];
     const lines = working.split('\n');
-    let fenceOpenAt = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (/^```/.test(lines[i].trim())) fenceOpenAt = (fenceOpenAt === -1) ? i : -1;
-    }
-    if (fenceOpenAt !== -1) {
-      const codeLines = lines.slice(fenceOpenAt + 1);
-      const lineCount = codeLines.filter(l => l.trim() !== '').length;
-      if (lineCount > 3) {
-        const before = lines.slice(0, fenceOpenAt).join('\n');
-        working = before + (before ? '\n\n' : '') + 'Bestand wordt geschreven — ' + lineCount + ' regel' + (lineCount === 1 ? '' : 's') + ' tot nu toe...';
+    const outLines = [];
+    let i = 0;
+    while (i < lines.length) {
+      const fenceMatch = /^```(\S*)\s*$/.exec(lines[i].trim());
+      if (!fenceMatch) { outLines.push(lines[i]); i++; continue; }
+
+      const lang = (fenceMatch[1] || '').toLowerCase();
+      let filenameHint = null;
+      let hops = 0, back = outLines.length - 1;
+      while (back >= 0 && hops < 3) {
+        const t = outLines[back].trim();
+        if (t) {
+          const m = /([A-Za-z0-9_.\-\/]+\.[A-Za-z0-9]{1,10})\s*:?\s*$/.exec(t);
+          if (m) { filenameHint = m[1]; break; }
+          hops++;
+        }
+        back--;
       }
+
+      let j = i + 1;
+      const blockLines = [];
+      let closed = false;
+      while (j < lines.length) {
+        if (lines[j].trim() === '```') { closed = true; break; }
+        blockLines.push(lines[j]);
+        j++;
+      }
+      const lineCount = blockLines.filter(l => l.trim() !== '').length;
+      const looksLikeFile = !!filenameHint || (!NON_FILE_LANGS.includes(lang) && lineCount > 3);
+
+      if (looksLikeFile && closed) {
+        outLines.push((filenameHint || 'Bestand') + ' — ' + lineCount + ' regel' + (lineCount === 1 ? '' : 's') + ', klaar.');
+        i = j + 1;
+        continue;
+      }
+      if (looksLikeFile && !closed && lineCount > 3) {
+        // Het laatste, nog open blok — hier is de AI middenin bezig.
+        outLines.push('Bestand wordt geschreven' + (filenameHint ? ' (' + filenameHint + ')' : '') + ' — ' + lineCount + ' regel' + (lineCount === 1 ? '' : 's') + ' tot nu toe...');
+        i = lines.length; // de rest is toch allemaal dit ene, nog-open blok
+        continue;
+      }
+      // Geen bestand (te kort, of een taal als txt/plain) — gewoon laten
+      // staan zoals het is, inclusief de ```-hekjes; die worden hieronder
+      // nog netjes weggehaald door de bestaande opschoning.
+      outLines.push(lines[i]);
+      i++;
     }
-    const cleaned = working
+
+    const cleaned = outLines.join('\n')
       .replace(/^```[a-zA-Z0-9_+-]*\s*$/gm, '')
       .replace(/^#{1,6}\s+/gm, '')
       .replace(/^-{3,}\s*$/gm, '')
