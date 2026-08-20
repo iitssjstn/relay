@@ -1263,9 +1263,17 @@
     <div class="field">
       <label class="checkbox-label">
         <input id="fCanExecuteCode" type="checkbox">
-        Code zelf laten uitvoeren (E2B)
+        Code zelf laten uitvoeren (E2B, agentisch)
       </label>
-      <div class="field-hint">Deze AI mag code die ze schrijft zelf laten draaien in de E2B-sandbox, het resultaat zien, en er zo nodig op reageren — automatisch, zonder dat jij op "uitvoeren" hoeft te klikken. Vereist een E2B API-key onder je accountmenu.</div>
+      <div class="field-hint">Deze AI mag tíjdens het antwoord zelf besluiten code te schrijven, in de E2B-sandbox te draaien, het resultaat te zien, en erop te reageren. Werkt goed maar kost per test-rondje extra tokens (het hele gesprek gaat elke keer opnieuw mee). Vereist een E2B API-key onder je accountmenu.</div>
+    </div>
+
+    <div class="field">
+      <label class="checkbox-label">
+        <input id="fAutoTestFiles" type="checkbox">
+        Gegenereerde bestanden automatisch testen (E2B, geen extra tokens)
+      </label>
+      <div class="field-hint">Test na afloop van elk antwoord automatisch de bestanden die de AI daadwerkelijk heeft geschreven (niet losse, door de AI zelf verzonnen test-snippets) — rechtstreeks via Relay, buiten het gesprek met de AI om. Kost dus geen extra AI-tokens. De AI ziet het resultaat niet en reageert er niet op; je ziet het gewoon zelf in de chat staan. Vereist een E2B API-key onder je accountmenu.</div>
     </div>
 
     <div class="copyright-note">
@@ -2677,6 +2685,7 @@
 
       containerEl.appendChild(wrap);
     }
+    return filesInMessage;
   }
 
   function addCopyButton(bubbleEl, rawText){
@@ -2855,8 +2864,9 @@
         if (event.phase === 'start') {
           const block = document.createElement('div');
           block.className = 'tool-run-block';
+          const startText = event.label ? event.label + '...' : 'Code uitvoeren (' + (event.language || '') + ')...';
           block.innerHTML = `
-            <div class="tool-run-header"><span class="artifact-run-spinner"></span> Code uitvoeren (${escapeHtml(event.language || '')})...</div>
+            <div class="tool-run-header"><span class="artifact-run-spinner"></span> ${escapeHtml(startText)}</div>
             <pre class="tool-run-code">${escapeHtml(event.code || '')}</pre>
           `;
           toolRunList.appendChild(block);
@@ -2864,7 +2874,7 @@
         } else if (event.phase === 'result') {
           const block = currentToolBlock || toolRunList.lastElementChild;
           if (!block) return;
-          block.querySelector('.tool-run-header').textContent = 'Code uitgevoerd (' + (event.language || '') + ')';
+          block.querySelector('.tool-run-header').textContent = event.label || ('Code uitgevoerd (' + (event.language || '') + ')');
           let html = '';
           if (event.stdout) html += '<pre>' + escapeHtml(event.stdout) + '</pre>';
           if (event.results && event.results.length) html += '<pre>' + escapeHtml(event.results.join('\n')) + '</pre>';
@@ -2884,7 +2894,7 @@
         bubbleEl.innerHTML = renderMarkdownSafe(text || '(leeg antwoord)');
         addCopyButton(bubbleEl, text || '(leeg antwoord)');
         wrapTables(bubbleEl);
-        enhanceCodeBlocks(bubbleEl);
+        return enhanceCodeBlocks(bubbleEl);
       },
       remove(){ wrap.remove(); }
     };
@@ -2906,6 +2916,7 @@
     $('fMaxOutput').value = node ? node.maxOutput : PROVIDER_DEFAULTS['anthropic'].maxOutput;
     $('fExtendedThinking').checked = node ? !!node.extendedThinking : false;
     $('fCanExecuteCode').checked = node ? !!node.canExecuteCode : false;
+    $('fAutoTestFiles').checked = node ? !!node.autoTestFiles : false;
     $('modalDeleteBtn').style.display = node ? 'block' : 'none';
     updateProviderHint();
     $('modalOverlay').style.display = 'flex';
@@ -2951,6 +2962,7 @@
     const maxOutput = parseInt($('fMaxOutput').value, 10) || PROVIDER_DEFAULTS[provider].maxOutput;
     const extendedThinking = provider === 'anthropic' && $('fExtendedThinking').checked;
     const canExecuteCode = $('fCanExecuteCode').checked;
+    const autoTestFiles = $('fAutoTestFiles').checked;
 
     if (!model) { $('fModel').focus(); return; }
     if (!apiKey) { $('fKey').focus(); return; }
@@ -2958,9 +2970,9 @@
 
     if (editingId) {
       const node = nodes.find(n => n.id === editingId);
-      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode });
+      Object.assign(node, { provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode, autoTestFiles });
     } else {
-      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode, status: 'queued' });
+      nodes.push({ id: uid(), provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, extendedThinking, canExecuteCode, autoTestFiles, status: 'queued' });
       if (activeIndex === -1) activeIndex = 0;
     }
     saveNodes();
@@ -3182,7 +3194,10 @@
         } while (truncated && continuations < MAX_CONTINUATIONS);
 
         const replyText = accumulated.trim() || '(Leeg antwoord ontvangen van ' + node.name + ' — dit kan wijzen op een te lage "max antwoordlengte"-instelling bij deze AI, of een probleem bij de provider zelf. Probeer het nog eens, of check de instellingen van deze AI in de Ketting.)';
-        streamHandle.finish(replyText);
+        const generatedFiles = streamHandle.finish(replyText);
+        if (node.autoTestFiles && generatedFiles && generatedFiles.length) {
+          autoTestGeneratedFiles(streamHandle, generatedFiles);
+        }
         node.status = 'done';
         node.coolDownUntil = null;
         currentAbortController = null;
@@ -3316,12 +3331,34 @@
     }
   }
 
+  // Test na afloop van een antwoord de bestanden die de AI daadwerkelijk
+  // heeft geschreven (niet losse, zelfverzonnen test-snippets) — volledig
+  // los van het gesprek met de AI, dus zonder extra tokens te kosten. De
+  // AI krijgt het resultaat niet te zien; dit is puur voor de gebruiker.
+  async function autoTestGeneratedFiles(streamHandle, files){
+    const runnable = files.filter(f => runnableLanguageFor(f.path));
+    for (const f of runnable) {
+      const lang = runnableLanguageFor(f.path);
+      const label = 'Automatisch getest: ' + f.path;
+      streamHandle.toolRun({ phase: 'start', language: lang, code: f.content, label });
+      const execResult = await executeCodeViaE2B(lang, f.content);
+      streamHandle.toolRun(Object.assign({ phase: 'result', language: lang, code: f.content, label }, execResult));
+    }
+  }
+
+  const TOOL_RESULT_MAX_CHARS = 3000; // voorkomt dat een uitvoer met veel output het gesprek (en daarmee elke volgende ronde) onnodig opblaast
+
+  function truncateForTool(text){
+    if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
+    return text.slice(0, TOOL_RESULT_MAX_CHARS) + '\n\n[... afgekapt, ' + (text.length - TOOL_RESULT_MAX_CHARS) + ' tekens niet getoond om tokens te sparen ...]';
+  }
+
   function formatToolResultText(execResult){
     const parts = [];
-    if (execResult.stdout) parts.push('STDOUT:\n' + execResult.stdout);
-    if (execResult.results && execResult.results.length) parts.push('RESULTAAT:\n' + execResult.results.join('\n'));
-    if (execResult.stderr) parts.push('STDERR:\n' + execResult.stderr);
-    if (execResult.error) parts.push('FOUT:\n' + execResult.error);
+    if (execResult.stdout) parts.push('STDOUT:\n' + truncateForTool(execResult.stdout));
+    if (execResult.results && execResult.results.length) parts.push('RESULTAAT:\n' + truncateForTool(execResult.results.join('\n')));
+    if (execResult.stderr) parts.push('STDERR:\n' + truncateForTool(execResult.stderr));
+    if (execResult.error) parts.push('FOUT:\n' + truncateForTool(execResult.error));
     return parts.length ? parts.join('\n\n') : '(geen uitvoer)';
   }
 
