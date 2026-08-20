@@ -2216,19 +2216,33 @@
   // te blijven staan: dit is een lichte, pure tekstvervanging (geen HTML-
   // parsing, geen DOM-herbouw) en dus goedkoop genoeg om bij elk frame te
   // draaien, in tegenstelling tot de volledige markdown-render.
+  // Tijdens live typen tonen we hooguit de laatste zoveel tekens — bij een
+  // heel lang antwoord zou het bij élk schermbeeld opnieuw doorzoeken van
+  // de VOLLEDIGE, groeiende tekst de browser merkbaar kunnen laten
+  // vastlopen. Het volledige antwoord komt sowieso correct terug zodra
+  // het klaar is (via finish() hieronder, dat wél de complete tekst
+  // gebruikt) — dit begrenst alleen wat er live wordt voorgeschoteld.
+  const STREAM_DISPLAY_TAIL_CHARS = 20000;
+
   function cleanStreamingText(text){
+    let working = text;
+    let truncated = false;
+    if (working.length > STREAM_DISPLAY_TAIL_CHARS) {
+      working = working.slice(-STREAM_DISPLAY_TAIL_CHARS);
+      truncated = true;
+    }
+
     // Staat er aan het eind een codeblok dat nog niet is afgesloten (de
     // AI is 'm nog aan het schrijven)? Toon dan niet de hele, groeiende
     // ruwe code — dat voelt traag aan, alsof je moet wachten tot alles is
     // langsgekomen. Toon in plaats daarvan een korte, oplopende teller;
     // zodra het blok wél sluit, klapt het vanzelf samen tot het bekende
     // bestandskaartje (via enhanceCodeBlocks, na renderMarkdownSafe).
-    const lines = text.split('\n');
+    const lines = working.split('\n');
     let fenceOpenAt = -1;
     for (let i = 0; i < lines.length; i++) {
       if (/^```/.test(lines[i].trim())) fenceOpenAt = (fenceOpenAt === -1) ? i : -1;
     }
-    let working = text;
     if (fenceOpenAt !== -1) {
       const codeLines = lines.slice(fenceOpenAt + 1);
       const lineCount = codeLines.filter(l => l.trim() !== '').length;
@@ -2237,12 +2251,13 @@
         working = before + (before ? '\n\n' : '') + 'Bestand wordt geschreven — ' + lineCount + ' regel' + (lineCount === 1 ? '' : 's') + ' tot nu toe...';
       }
     }
-    return working
+    const cleaned = working
       .replace(/^```[a-zA-Z0-9_+-]*\s*$/gm, '')
       .replace(/^#{1,6}\s+/gm, '')
       .replace(/^-{3,}\s*$/gm, '')
       .replace(/\*\*(.+?)\*\*/g, '$1')
       .replace(/\n{3,}/g, '\n\n');
+    return (truncated ? '(dit antwoord loopt door — eerder deel verschijnt weer zodra het klaar is)\n\n' : '') + cleaned;
   }
 
   function renderMarkdownSafe(text){
@@ -2685,9 +2700,20 @@
     // doorloopt in plaats van elk frame te herstarten.
     let pendingText = null;
     let frameScheduled = false;
+    let lastCleanAt = 0;
+    const CLEAN_THROTTLE_MS = 120; // max ~8x per seconde de dure opschoning draaien, niet 60x
     function flush(){
       frameScheduled = false;
       if (pendingText === null) return;
+      const now = performance.now();
+      if (now - lastCleanAt < CLEAN_THROTTLE_MS) {
+        // Nog te kort geleden sinds de vorige opschoonbeurt — probeer het
+        // een paar frames later opnieuw, in plaats van bij ieder
+        // schermbeeld de (steeds groter wordende) tekst te doorzoeken.
+        if (!frameScheduled) { frameScheduled = true; requestAnimationFrame(flush); }
+        return;
+      }
+      lastCleanAt = now;
       textEl.textContent = cleanStreamingText(pendingText);
       pendingText = null;
       if (autoScrollToBottom) scrollMessagesToBottom();
@@ -2933,6 +2959,9 @@
   async function runTurn(lastUserText){
     sending = true;
     updateComposerState();
+    // Vóór er eventueel tussentijds een concept-antwoord in de geschiedenis
+    // belandt (zie hieronder), anders raakt deze controle in de war.
+    const isFirstExchangeOfConversation = conversation.length === 1;
 
     let attempts = 0;
     while (attempts < nodes.length) {
@@ -2964,6 +2993,29 @@
       currentAbortController = new AbortController();
       let accumulated = '';
       let partialSoFar = '';
+      // Tussentijds, tijdens het streamen zelf, af en toe het concept-
+      // antwoord al opslaan — crasht de pagina of moet je herladen
+      // middenin een lang antwoord, dan ben je niet alles kwijt. Wordt
+      // hieronder bij het echt afronden (succes/gestopt) bijgewerkt tot
+      // de definitieve tekst, of juist weer verwijderd als deze poging
+      // mislukt en er een handoff naar de volgende AI volgt.
+      let partialEntryIndex = -1;
+      let autosavePending = false;
+      function scheduleAutosave(){
+        if (autosavePending) return;
+        autosavePending = true;
+        setTimeout(() => {
+          autosavePending = false;
+          if (partialEntryIndex === -1) {
+            conversation.push({ role: 'assistant', content: partialSoFar, providerName: node.name });
+            partialEntryIndex = conversation.length - 1;
+          } else {
+            conversation[partialEntryIndex] = { role: 'assistant', content: partialSoFar, providerName: node.name };
+          }
+          saveCurrentConversation();
+        }, 4000);
+      }
+
       // Sommige AI's lopen tegen hun eigen antwoordlimiet aan (niet de
       // contextlimiet) en willen dan zelf het antwoord in delen opknippen
       // die je handmatig achter elkaar moet plakken. Dat doen we hier
@@ -2984,26 +3036,36 @@
           }, (partial) => {
             partialSoFar = accumulated + partial;
             streamHandle.update(partialSoFar);
+            scheduleAutosave();
           });
+          // Als een "vervolg"-aanroep zelf niets nieuws opleverde, heeft
+          // doorgaan geen zin — sommige providers reageren onvoorspelbaar
+          // op een lege assistant-beurt die we als vervolg meesturen, en
+          // dan kunnen alle volgende pogingen ook weer leeg blijven. Beter
+          // stoppen met wat er is dan 8x zinloos blijven proberen.
+          const gotNewText = !!result.text;
           accumulated += result.text;
           partialSoFar = accumulated;
-          truncated = result.truncated;
+          truncated = result.truncated && gotNewText;
           continuations++;
         } while (truncated && continuations < MAX_CONTINUATIONS);
 
-        const replyText = accumulated.trim() || '(leeg antwoord)';
+        const replyText = accumulated.trim() || '(Leeg antwoord ontvangen van ' + node.name + ' — dit kan wijzen op een te lage "max antwoordlengte"-instelling bij deze AI, of een probleem bij de provider zelf. Probeer het nog eens, of check de instellingen van deze AI in de Ketting.)';
         streamHandle.finish(replyText);
         node.status = 'done';
         node.coolDownUntil = null;
         currentAbortController = null;
-        const wasFirstExchange = conversation.length === 1; // vóór het toevoegen van dit AI-antwoord
-        conversation.push({ role: 'assistant', content: replyText, providerName: node.name });
+        if (partialEntryIndex === -1) {
+          conversation.push({ role: 'assistant', content: replyText, providerName: node.name });
+        } else {
+          conversation[partialEntryIndex] = { role: 'assistant', content: replyText, providerName: node.name };
+        }
         renderNodes();
         sending = false;
         updateComposerState();
         saveCurrentConversation();
         autoUpdateMemory(node, lastUserText, replyText);
-        if (wasFirstExchange) maybeGenerateConversationTitle(node, currentConvId, lastUserText, replyText);
+        if (isFirstExchangeOfConversation) maybeGenerateConversationTitle(node, currentConvId, lastUserText, replyText);
         return;
       } catch (err) {
         currentAbortController = null;
@@ -3013,12 +3075,25 @@
           const finalText = partialSoFar.trim() || '(gestopt)';
           streamHandle.finish(finalText);
           node.status = 'done';
-          conversation.push({ role: 'assistant', content: finalText, providerName: node.name });
+          if (partialEntryIndex === -1) {
+            conversation.push({ role: 'assistant', content: finalText, providerName: node.name });
+          } else {
+            conversation[partialEntryIndex] = { role: 'assistant', content: finalText, providerName: node.name };
+          }
           renderNodes();
           sending = false;
           updateComposerState();
           saveCurrentConversation();
           return;
+        }
+        // Deze poging is mislukt (contextlimiet/rate limit/andere fout) —
+        // een eventueel tussentijds opgeslagen concept-antwoord van déze
+        // mislukte poging hoort niet in de geschiedenis te blijven staan;
+        // de volgende AI in de ketting begint gewoon schoon.
+        if (partialEntryIndex !== -1) {
+          conversation.splice(partialEntryIndex, 1);
+          partialEntryIndex = -1;
+          saveCurrentConversation();
         }
         streamHandle.remove();
         if (err.isContextLimit) {
