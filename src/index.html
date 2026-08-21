@@ -734,6 +734,7 @@
   }
   .msg.system.handoff .bubble{ border-color: var(--relay-green-dim); color: var(--relay-green); }
   .msg.system.err .bubble{ border-color: var(--danger); color: var(--danger); }
+  .msg.system.busy .bubble{ display:inline-flex; align-items:center; gap:8px; }
 
   .typing{
     display:inline-flex; gap:3px; align-items:center; padding: 2px 0;
@@ -2302,7 +2303,7 @@
   }
 
   function updateComposerState(){
-    const ready = nodes.length > 0 && !sending;
+    const ready = nodes.length > 0 && !sending && !compressInProgress;
     const wasDisabled = input.disabled;
     input.disabled = !ready;
     attachImageBtn.disabled = !ready;
@@ -2852,7 +2853,8 @@
     const wrap = document.createElement('div');
     wrap.className = 'msg ' + role + (opts.cls ? ' ' + opts.cls : '');
     if (role === 'system') {
-      wrap.innerHTML = `<div class="bubble">${escapeHtml(content)}</div>`;
+      const spinnerHtml = opts.spinner ? '<span class="artifact-run-spinner"></span>' : '';
+      wrap.innerHTML = `<div class="bubble">${spinnerHtml}<span>${escapeHtml(content)}</span></div>`;
     } else {
       const avatarLabel = role === 'user' ? 'JIJ' : (opts.providerName ? opts.providerName.slice(0,2).toUpperCase() : 'AI');
       const imagesHtml = (opts.images && opts.images.length)
@@ -3253,8 +3255,10 @@
   }
 
   let pendingCompressSplit = null; // hoeveel berichten straks vervangen worden, tot de gebruiker bevestigt
+  let compressInProgress = false; // blokkeert versturen zolang comprimeren loopt — voorkomt dat de gesprek-array halverwege verandert
 
   $('compressConvBtn').addEventListener('click', async () => {
+    if (sending) { showToast('Wacht tot het huidige antwoord klaar is voordat je comprimeert.', 'info'); return; }
     const node = nodes[activeIndex];
     if (!node) { showToast('Geen actieve AI om de samenvatting mee te maken.'); return; }
     if (conversation.length < COMPRESS_MIN_MESSAGES) return;
@@ -3263,11 +3267,16 @@
     const toSummarize = conversation.slice(0, splitIndex);
     if (!toSummarize.length) return;
     pendingCompressSplit = splitIndex;
+    const beforeChars = JSON.stringify(toSummarize).length;
 
     const btn = $('compressConvBtn');
     btn.disabled = true;
-    const originalLabel = btn.textContent;
-    btn.textContent = 'bezig...';
+    compressInProgress = true; // blokkeert intussen het versturen van een nieuw bericht — voorkomt dat de gesprek-array halverwege verandert
+    updateComposerState();
+    // Statusbericht in de chat zelf, met een spinner — net als bij de
+    // denkstap en het uitvoeren van code — in plaats van alleen de
+    // knoptekst te veranderen, wat makkelijk over het hoofd wordt gezien.
+    const statusWrap = addMessage('system', 'Gesprek wordt samengevat (' + toSummarize.length + ' berichten)...', { cls: 'busy', spinner: true });
     try {
       const transcript = toSummarize.map(m => {
         if (m.role === 'user') return 'Gebruiker: ' + m.content;
@@ -3275,24 +3284,39 @@
       }).join('\n\n');
       const prompt = 'Vat het volgende (oudere) deel van een gesprek compact samen. Behoud alle belangrijke beslissingen, genoemde bestandsnamen/code, en context die nodig is om het gesprek natuurlijk te laten doorlopen — dit vervangt namelijk de volledige geschiedenis hieronder, dus verlies geen cruciale informatie, maar wees wel bondig (dit is puur om tokens te besparen).\n\n' + transcript;
       const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
-      $('compressPreviewText').value = (raw.text || '').trim();
-      $('compressPreviewSub').textContent = 'Het oudste ' + toSummarize.length + ' berichten worden vervangen door onderstaande samenvatting — de laatste ' + (conversation.length - splitIndex) + ' berichten blijven ongewijzigd staan. Dit bespaart aanzienlijk op tokens bij elk volgend bericht, maar details die niet in de samenvatting terechtkomen, gaan wel verloren.';
+      const summaryText = (raw.text || '').trim();
+      const afterChars = summaryText.length;
+      const reduction = beforeChars > 0 ? Math.round((1 - afterChars / beforeChars) * 100) : 0;
+      $('compressPreviewText').value = summaryText;
+      $('compressPreviewSub').innerHTML = 'Het oudste ' + toSummarize.length + ' berichten worden vervangen door onderstaande samenvatting — de laatste ' + (conversation.length - splitIndex) + ' berichten blijven ongewijzigd staan.<br><br><strong>' + beforeChars.toLocaleString('nl-NL') + ' tekens aan geschiedenis → ' + afterChars.toLocaleString('nl-NL') + ' tekens samenvatting (' + (reduction > 0 ? '~' + reduction + '% kleiner' : 'geen besparing in dit geval') + ').</strong>';
       $('compressPreviewMsg').style.display = 'none';
       $('compressPreviewOverlay').style.display = 'flex';
+      statusWrap.remove(); // voorbeeldscherm toont het resultaat al, geen dubbel bericht nodig
     } catch (e) {
-      showToast('Samenvatten mislukt: ' + e.message);
+      statusWrap.classList.remove('busy');
+      statusWrap.classList.add('err');
+      statusWrap.querySelector('.bubble span:last-child').textContent = 'Samenvatten mislukt: ' + e.message;
+      statusWrap.querySelector('.artifact-run-spinner')?.remove();
+      compressInProgress = false;
+      updateComposerState();
     } finally {
       btn.disabled = false;
-      btn.textContent = originalLabel;
     }
   });
 
   $('compressPreviewCancelBtn').addEventListener('click', () => {
     $('compressPreviewOverlay').style.display = 'none';
     pendingCompressSplit = null;
+    compressInProgress = false;
+    updateComposerState();
   });
   $('compressPreviewOverlay').addEventListener('click', (e) => {
-    if (e.target === $('compressPreviewOverlay')) { $('compressPreviewOverlay').style.display = 'none'; pendingCompressSplit = null; }
+    if (e.target === $('compressPreviewOverlay')) {
+      $('compressPreviewOverlay').style.display = 'none';
+      pendingCompressSplit = null;
+      compressInProgress = false;
+      updateComposerState();
+    }
   });
 
   $('compressPreviewConfirmBtn').addEventListener('click', () => {
@@ -3305,18 +3329,34 @@
     }
     if (pendingCompressSplit === null || pendingCompressSplit > conversation.length) {
       $('compressPreviewOverlay').style.display = 'none';
+      compressInProgress = false;
+      updateComposerState();
       return;
     }
     const kept = conversation.slice(pendingCompressSplit);
     // Als losse 'user'-bericht (met een korte, vaste AI-bevestiging erna)
     // ingevoegd, zodat de gebruiker/AI-beurten voor élke provider — ook
     // Gemini, die hier streng in is — netjes blijven afwisselen.
-    conversation = [
+    const newConversation = [
       { role: 'user', content: '[Samenvatting van het eerdere deel van dit gesprek, ter vervanging van de volledige geschiedenis om tokens te besparen]\n\n' + summary },
       { role: 'assistant', content: 'Begrepen — ik ga verder vanuit deze samenvatting.', providerName: 'Relay' },
       ...kept
     ];
+    // Vangrail: het resultaat moet daadwerkelijk korter zijn en netjes
+    // blijven afwisselen tussen gebruiker/AI — mocht dat door welke
+    // omstandigheid dan ook niet kloppen, dan liever niets toepassen dan
+    // een stiekem kapot of niet-verkleind gesprek opleveren.
+    const strictlyAlternates = newConversation.every((m, idx) => idx === 0 || m.role !== newConversation[idx - 1].role);
+    if (newConversation.length >= conversation.length || !strictlyAlternates) {
+      $('compressPreviewMsg').textContent = 'Comprimeren leverde onverwacht geen kleiner of geldig gesprek op — niets toegepast. Probeer het opnieuw.';
+      $('compressPreviewMsg').style.color = 'var(--danger)';
+      $('compressPreviewMsg').style.display = 'block';
+      return;
+    }
+    conversation = newConversation;
     pendingCompressSplit = null;
+    compressInProgress = false;
+    updateComposerState();
     $('compressPreviewOverlay').style.display = 'none';
     renderFullConversation();
     updateCompressButtonVisibility();
@@ -3446,11 +3486,19 @@
       // mislukt en er een handoff naar de volgende AI volgt.
       let partialEntryIndex = -1;
       let autosavePending = false;
+      // Cruciaal: zonder deze vlag kan een timer die nog liep toen deze
+      // beurt allang (succesvol, gestopt, of mislukt) was afgerond, sowieso
+      // na 4 seconden alsnog afgaan en dan blind een verouderd AI-antwoord
+      // aan het gesprek plakken — zelfs als er intussen he-le-maal niets
+      // meer mee te maken heeft (bv. na comprimeren). Elk afsluitpunt van
+      // deze beurt hieronder zet 'm op true, vóórdat de timer nog afgaat.
+      let turnEnded = false;
       function scheduleAutosave(){
         if (autosavePending) return;
         autosavePending = true;
         setTimeout(() => {
           autosavePending = false;
+          if (turnEnded) return;
           if (partialEntryIndex === -1) {
             conversation.push({ role: 'assistant', content: partialSoFar, providerName: node.name });
             partialEntryIndex = conversation.length - 1;
@@ -3498,6 +3546,7 @@
         } while (truncated && continuations < MAX_CONTINUATIONS);
 
         const replyText = accumulated.trim() || '(Leeg antwoord ontvangen van ' + node.name + ' — dit kan wijzen op een te lage "max antwoordlengte"-instelling bij deze AI, of een probleem bij de provider zelf. Probeer het nog eens, of check de instellingen van deze AI in de Ketting.)';
+        turnEnded = true; // vóórdat de rest gebeurt — een eventuele nog-lopende autosave-timer mag hierna niets meer aan het gesprek toevoegen
         const generatedFiles = streamHandle.finish(replyText);
         if (node.autoTestFiles && generatedFiles && generatedFiles.length) {
           autoTestGeneratedFiles(streamHandle, generatedFiles);
@@ -3530,6 +3579,7 @@
         if (err.name === 'AbortError') {
           // Zelf gestopt — bewaar wat er al binnen was als het antwoord,
           // in plaats van het weg te gooien of als fout te tonen.
+          turnEnded = true;
           const finalText = partialSoFar.trim() || '(gestopt)';
           streamHandle.finish(finalText);
           node.status = 'done';
@@ -3551,6 +3601,7 @@
         // een eventueel tussentijds opgeslagen concept-antwoord van déze
         // mislukte poging hoort niet in de geschiedenis te blijven staan;
         // de volgende AI in de ketting begint gewoon schoon.
+        turnEnded = true;
         if (partialEntryIndex !== -1) {
           conversation.splice(partialEntryIndex, 1);
           partialEntryIndex = -1;
