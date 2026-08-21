@@ -554,38 +554,86 @@ app.put('/api/e2b-token', requireAuth, (req, res) => {
 // aanmerking voor de uitvoer-knop aan de voorkant.
 const E2B_LANGUAGES = ['python', 'javascript', 'typescript', 'r', 'java', 'bash'];
 const EXECUTE_TIMEOUT_MS = 45000; // ruim genoeg voor een script, geen langlopende dienst
+const PROJECT_TEST_TIMEOUT_MS = 90000; // installeren (npm/pip) + opstarten duurt nu eenmaal langer dan één los scriptje
+const PROJECT_TEST_MAX_FILES = 200; // vangrail tegen een onbedoeld enorme upload naar de sandbox
 
 app.post('/api/execute', requireAuth, async (req, res) => {
-  const { language, content } = req.body || {};
-  if (!language || !E2B_LANGUAGES.includes(language)) {
-    return res.status(400).json({ error: 'Deze taal wordt niet ondersteund voor uitvoering.' });
+  const { language, content, files, command } = req.body || {};
+  const isProjectTest = Array.isArray(files);
+
+  if (!isProjectTest) {
+    if (!language || !E2B_LANGUAGES.includes(language)) {
+      return res.status(400).json({ error: 'Deze taal wordt niet ondersteund voor uitvoering.' });
+    }
+    if (typeof content !== 'string' || !content.trim()) {
+      return res.status(400).json({ error: 'Geen code om uit te voeren.' });
+    }
+  } else {
+    if (!files.length) return res.status(400).json({ error: 'Geen bestanden om te testen.' });
+    if (files.length > PROJECT_TEST_MAX_FILES) return res.status(400).json({ error: 'Te veel bestanden in één keer (max ' + PROJECT_TEST_MAX_FILES + ').' });
+    if (typeof command !== 'string' || !command.trim()) return res.status(400).json({ error: 'Geen commando om uit te voeren.' });
   }
-  if (typeof content !== 'string' || !content.trim()) {
-    return res.status(400).json({ error: 'Geen code om uit te voeren.' });
-  }
+
   const row = db.prepare('SELECT e2b_api_key FROM users WHERE id = ?').get(req.user.uid);
   const apiKey = row && row.e2b_api_key;
   if (!apiKey) {
     return res.status(400).json({ error: 'Nog geen E2B API-key ingesteld. Voeg die eerst toe via het accountmenu.' });
   }
 
+  const timeoutMs = isProjectTest ? PROJECT_TEST_TIMEOUT_MS : EXECUTE_TIMEOUT_MS;
   let sandbox = null;
   const timer = setTimeout(() => {
     // Vangnet: mocht E2B zelf onverhoopt blijven hangen, sluit de sandbox
     // en het verzoek toch netjes af in plaats van de gebruiker eindeloos
     // te laten wachten.
     if (sandbox) sandbox.kill().catch(() => {});
-  }, EXECUTE_TIMEOUT_MS);
+  }, timeoutMs);
 
   try {
     const { Sandbox } = require('@e2b/code-interpreter');
-    sandbox = await Sandbox.create({ apiKey, timeoutMs: EXECUTE_TIMEOUT_MS });
-    const execution = await sandbox.runCode(content, { language });
+    sandbox = await Sandbox.create({ apiKey, timeoutMs });
+
+    if (!isProjectTest) {
+      const execution = await sandbox.runCode(content, { language });
+      res.json({
+        stdout: (execution.logs && execution.logs.stdout || []).join('\n'),
+        stderr: (execution.logs && execution.logs.stderr || []).join('\n'),
+        error: execution.error ? (execution.error.name + ': ' + execution.error.value) : null,
+        results: (execution.results || []).map(r => r.text).filter(Boolean)
+      });
+      return;
+    }
+
+    // Hele-project-test: alle bestanden (met hun mapstructuur) wegschrijven,
+    // dan één commando draaien (bv. "npm install && npm start" of
+    // "pip install -r requirements.txt && python app.py"). Dit is geen
+    // Docker-buildtest — gewoon dezelfde sandbox, maar met een volledig
+    // project erin i.p.v. één los scriptje.
+    for (const f of files) {
+      if (!f || typeof f.path !== 'string' || !f.path.trim() || typeof f.content !== 'string') continue;
+      await sandbox.files.write(f.path.trim(), f.content);
+    }
+    let result;
+    try {
+      result = await sandbox.commands.run(command, { timeoutMs: timeoutMs - 5000 });
+    } catch (cmdErr) {
+      // E2B's commands.run() gooit zelf een fout bij een niet-nul exitcode
+      // of bij het aflopen van de timeout — in beide gevallen willen we
+      // wél de tot dan toe verzamelde uitvoer teruggeven, niet alleen een
+      // kale foutmelding.
+      result = {
+        stdout: cmdErr.result?.stdout || '',
+        stderr: cmdErr.result?.stderr || cmdErr.message || '',
+        exitCode: cmdErr.result?.exitCode ?? null
+      };
+    }
     res.json({
-      stdout: (execution.logs && execution.logs.stdout || []).join('\n'),
-      stderr: (execution.logs && execution.logs.stderr || []).join('\n'),
-      error: execution.error ? (execution.error.name + ': ' + execution.error.value) : null,
-      results: (execution.results || []).map(r => r.text).filter(Boolean)
+      stdout: result.stdout || '',
+      stderr: result.stderr || '',
+      exitCode: result.exitCode,
+      error: (result.exitCode !== 0 && result.exitCode !== undefined && result.exitCode !== null)
+        ? ('Commando eindigde met foutcode ' + result.exitCode)
+        : null
     });
   } catch (e) {
     const msg = /api ?key/i.test(e.message || '') ? 'Ongeldige E2B API-key.' : ('Uitvoering mislukt: ' + e.message);

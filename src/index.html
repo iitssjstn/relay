@@ -1471,6 +1471,25 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="projectTestOverlay" style="display:none;">
+  <div class="modal" style="max-width:480px;">
+    <h2>Project testen</h2>
+    <div class="modal-sub">Schrijft alle huidige projectbestanden naar een geïsoleerde E2B-sandbox en draait onderstaand commando — bijvoorbeeld dependencies installeren en het project opstarten. Vangt de meeste echte fouten (ontbrekende dependency, syntaxfout, crash bij opstarten), maar test geen Dockerfile/container specifiek.</div>
+
+    <div class="field">
+      <label>Commando</label>
+      <input id="projectTestCommand" type="text" placeholder="bv. npm install && npm start" style="font-family:var(--font-mono);">
+    </div>
+
+    <div id="projectTestMsg" style="display:none; font-size:11.5px; margin-top:4px; margin-bottom:6px; line-height:1.4;"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="projectTestCancelBtn">Annuleren</button>
+      <button class="btn btn-primary" id="projectTestRunBtn">Testen</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="compressPreviewOverlay" style="display:none;">
   <div class="modal" style="max-width:520px;">
     <h2>Gesprek comprimeren</h2>
@@ -2765,6 +2784,14 @@
         toolbar.appendChild(previewBtn);
       }
 
+      const testBtn = document.createElement('button');
+      testBtn.type = 'button';
+      testBtn.className = 'ghost-btn';
+      testBtn.textContent = '🧪 Test project';
+      testBtn.title = 'Installeer en start het hele project in een geïsoleerde E2B-sandbox — vangt de meeste echte fouten (ontbrekende dependency, syntaxfout, crash bij opstarten)';
+      testBtn.addEventListener('click', () => openProjectTestPrompt(files));
+      toolbar.appendChild(testBtn);
+
       const zipBtn = document.createElement('button');
       zipBtn.type = 'button';
       zipBtn.className = 'ghost-btn';
@@ -2822,6 +2849,68 @@
     artifactPreviewFrame.style.display = 'block';
     artifactPreviewFrame.srcdoc = built.html;
   }
+
+  // Stelt een redelijk install+start-commando voor op basis van wat er in
+  // het project staat — puur een startpunt, de gebruiker kan het altijd
+  // nog aanpassen vóór het testen.
+  function guessProjectTestCommand(files){
+    const has = (name) => files.some(f => f.path === name || f.path.endsWith('/' + name));
+    if (has('package.json')) return 'npm install && npm start';
+    if (has('requirements.txt')) return 'pip install -r requirements.txt && python app.py';
+    if (has('Pipfile')) return 'pip install pipenv && pipenv install && pipenv run python app.py';
+    if (files.some(f => f.path.endsWith('.py'))) return 'python ' + files.find(f => f.path.endsWith('.py')).path;
+    return '';
+  }
+
+  let pendingProjectTestFiles = null;
+
+  function openProjectTestPrompt(files){
+    pendingProjectTestFiles = files;
+    $('projectTestCommand').value = guessProjectTestCommand(files);
+    $('projectTestMsg').style.display = 'none';
+    $('projectTestOverlay').style.display = 'flex';
+    setTimeout(() => $('projectTestCommand').focus(), 30);
+  }
+  $('projectTestCancelBtn').addEventListener('click', () => { $('projectTestOverlay').style.display = 'none'; pendingProjectTestFiles = null; });
+  $('projectTestOverlay').addEventListener('click', (e) => { if (e.target === $('projectTestOverlay')) { $('projectTestOverlay').style.display = 'none'; pendingProjectTestFiles = null; } });
+
+  $('projectTestRunBtn').addEventListener('click', async () => {
+    const command = $('projectTestCommand').value.trim();
+    if (!command) {
+      $('projectTestMsg').textContent = 'Geef een commando op om uit te voeren.';
+      $('projectTestMsg').style.color = 'var(--danger)';
+      $('projectTestMsg').style.display = 'block';
+      return;
+    }
+    const fileList = pendingProjectTestFiles;
+    $('projectTestOverlay').style.display = 'none';
+    pendingProjectTestFiles = null;
+
+    // Statusbericht in de chat zelf, met spinner — zelfde patroon als bij
+    // comprimeren, zodat duidelijk is dat er iets gebeurt (dit kan tot
+    // 90 seconden duren bij een npm install).
+    const statusWrap = addMessage('system', 'Project wordt getest (' + fileList.length + ' bestanden): ' + command, { cls: 'busy', spinner: true });
+    try {
+      const full = await fetchAllProjectFileContents(currentProjectId, fileList);
+      const result = await apiFetch('/api/execute', { method: 'POST', body: { files: full, command } });
+      statusWrap.remove();
+      let html = '<div class="tool-run-header">Projecttest: ' + escapeHtml(command) + (result.exitCode !== undefined && result.exitCode !== null ? ' (afsluitcode ' + result.exitCode + ')' : '') + '</div>';
+      if (result.stdout) html += '<div class="tool-run-output"><pre>' + escapeHtml(result.stdout) + '</pre></div>';
+      if (result.stderr) html += '<div class="tool-run-output"><pre class="stderr">' + escapeHtml(result.stderr) + '</pre></div>';
+      if (result.error) html += '<div class="tool-run-output"><pre class="stderr">' + escapeHtml(result.error) + '</pre></div>';
+      if (!result.stdout && !result.stderr && !result.error) html += '<div class="tool-run-output"><pre>(geen uitvoer)</pre></div>';
+      const wrap = document.createElement('div');
+      wrap.className = 'msg system';
+      wrap.innerHTML = '<div class="bubble" style="text-align:left; max-width:600px;"><div class="tool-run-block" style="border:none; background:transparent;">' + html + '</div></div>';
+      messagesEl.appendChild(wrap);
+      if (autoScrollToBottom) scrollMessagesToBottom();
+    } catch (e) {
+      statusWrap.classList.remove('busy');
+      statusWrap.classList.add('err');
+      statusWrap.querySelector('.bubble span:last-child').textContent = 'Projecttest mislukt: ' + e.message;
+      statusWrap.querySelector('.artifact-run-spinner')?.remove();
+    }
+  });
 
   // Code écht laten draaien — via E2B, in een geïsoleerde sandbox ver van
   // deze server. Toont stdout/stderr (en eventuele rijke output, zoals
