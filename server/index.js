@@ -57,9 +57,22 @@ app.use(helmet({
   // tegen de beperkte meerwaarde voor een self-hosted, persoonlijke tool.
   crossOriginEmbedderPolicy: false
 }));
-// 25mb i.p.v. 5mb — gesprekken kunnen nu base64-gecodeerde afbeeldingen
-// bevatten, die aanmerkelijk groter zijn dan platte tekst.
-app.use(express.json({ limit: '25mb' }));
+// Request size limits per soort endpoint i.p.v. overal dezelfde ruime
+// grens: alleen gesprekken kunnen (via base64-afbeeldingen) echt groot
+// worden, de rest van de app heeft daar nooit meer dan een fractie van
+// nodig. Eén expliciete keuzefunctie i.p.v. twee losse app.use()-lagen,
+// zodat er nooit onduidelijkheid is over welke van de twee een verzoek
+// daadwerkelijk verwerkt.
+const smallJsonBody = express.json({ limit: '512kb' });
+const largeJsonBody = express.json({ limit: '25mb' });
+app.use((req, res, next) => {
+  // Alle drie kunnen legitiem groot worden: gesprekken via base64-
+  // afbeeldingen, de proxy omdat die de hele gespreksgeschiedenis
+  // doorstuurt naar de AI, en execute bij een groter script om te testen.
+  const needsLargeLimit = req.path.startsWith('/api/conversations') || req.path === '/api/execute' || req.path === '/api/relay-proxy';
+  if (needsLargeLimit) return largeJsonBody(req, res, next);
+  return smallJsonBody(req, res, next);
+});
 app.use(cookieParser());
 app.set('trust proxy', 1); // NPM zit ervoor als reverse proxy
 
@@ -216,14 +229,14 @@ app.get('/api/auth/me', requireAuth, (req, res) => {
 
 app.get('/api/conversations', requireAuth, (req, res) => {
   const rows = db.prepare(
-    'SELECT id, title, updated_at as updatedAt FROM conversations WHERE user_id = ? ORDER BY updated_at DESC'
+    'SELECT id, title, updated_at as updatedAt, project_id as projectId FROM conversations WHERE user_id = ? ORDER BY updated_at DESC'
   ).all(req.user.uid);
   res.json(rows);
 });
 
 app.get('/api/conversations/:id', requireAuth, (req, res) => {
   const row = db.prepare(
-    'SELECT id, title, updated_at as updatedAt, messages FROM conversations WHERE id = ? AND user_id = ?'
+    'SELECT id, title, updated_at as updatedAt, project_id as projectId, messages FROM conversations WHERE id = ? AND user_id = ?'
   ).get(req.params.id, req.user.uid);
   if (!row) return res.status(404).json({ error: 'Gesprek niet gevonden.' });
   res.json({ ...row, messages: JSON.parse(row.messages) });
@@ -265,6 +278,119 @@ app.post('/api/conversations/:id/beacon', requireAuth, (req, res) => {
 
 app.delete('/api/conversations/:id', requireAuth, (req, res) => {
   db.prepare('DELETE FROM conversations WHERE id = ? AND user_id = ?').run(req.params.id, req.user.uid);
+  res.json({ ok: true });
+});
+
+// Koppelt (of ontkoppelt, met projectId: null) een gesprek aan een
+// project — bestanden die de AI daarna aanmaakt/bijwerkt belanden dan in
+// dat project, i.p.v. alleen los in dit ene gesprek te blijven hangen.
+app.put('/api/conversations/:id/project', requireAuth, (req, res) => {
+  const { projectId } = req.body || {};
+  if (projectId) {
+    const project = db.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?').get(projectId, req.user.uid);
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden.' });
+  }
+  const existing = db.prepare('SELECT id FROM conversations WHERE id = ? AND user_id = ?').get(req.params.id, req.user.uid);
+  if (existing) {
+    db.prepare('UPDATE conversations SET project_id = ? WHERE id = ? AND user_id = ?')
+      .run(projectId || null, req.params.id, req.user.uid);
+  } else {
+    // Een gloednieuw, nog leeg gesprek bestaat pas écht op de server
+    // zodra het eerste bericht wordt verstuurd — koppel je een project
+    // al daarvóór (heel natuurlijk: eerst het project kiezen, dán gaan
+    // typen), dan moet die rij hier alsnog aangemaakt worden.
+    db.prepare('INSERT INTO conversations (id, user_id, title, updated_at, messages, project_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(req.params.id, req.user.uid, 'Nieuw gesprek', Date.now(), '[]', projectId || null);
+  }
+  res.json({ ok: true });
+});
+
+// ---------- Projecten: een persistente bestandenset, los van een los
+// gesprek — de bestanden zijn de waarheid, een gesprek verwijst er
+// alleen naar. ----------
+
+function requireOwnedProject(req, res, next) {
+  const project = db.prepare('SELECT id, user_id, name FROM projects WHERE id = ? AND user_id = ?')
+    .get(req.params.id, req.user.uid);
+  if (!project) return res.status(404).json({ error: 'Project niet gevonden.' });
+  req.project = project;
+  next();
+}
+
+app.get('/api/projects', requireAuth, (req, res) => {
+  const rows = db.prepare(`
+    SELECT p.id, p.name, p.created_at as createdAt, p.updated_at as updatedAt,
+           (SELECT COUNT(*) FROM project_files WHERE project_id = p.id) as fileCount
+    FROM projects p WHERE p.user_id = ? ORDER BY p.updated_at DESC
+  `).all(req.user.uid);
+  res.json(rows);
+});
+
+app.post('/api/projects', requireAuth, (req, res) => {
+  const { name } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Geef het project een naam.' });
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  db.prepare('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, req.user.uid, name.trim().slice(0, 120), now, now);
+  res.json({ id, name: name.trim().slice(0, 120), createdAt: now, updatedAt: now, fileCount: 0 });
+});
+
+app.put('/api/projects/:id', requireAuth, requireOwnedProject, (req, res) => {
+  const { name } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Geef het project een naam.' });
+  db.prepare('UPDATE projects SET name = ?, updated_at = ? WHERE id = ?')
+    .run(name.trim().slice(0, 120), Date.now(), req.params.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/projects/:id', requireAuth, requireOwnedProject, (req, res) => {
+  // Gekoppelde gesprekken niet meeverwijderen — alleen ontkoppelen (geen
+  // FK-constraint op conversations.project_id, dus expliciet hier).
+  db.prepare('UPDATE conversations SET project_id = NULL WHERE project_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id); // project_files gaat mee via ON DELETE CASCADE
+  res.json({ ok: true });
+});
+
+app.get('/api/projects/:id/files', requireAuth, requireOwnedProject, (req, res) => {
+  const rows = db.prepare('SELECT path, length(content) as size, updated_at as updatedAt FROM project_files WHERE project_id = ? ORDER BY path ASC')
+    .all(req.params.id);
+  res.json(rows);
+});
+
+// Wildcard-route (i.p.v. :path) omdat bestandspaden zelf slashes bevatten
+// (bv. "src/components/App.jsx") — een normale :param matcht daar niet op.
+app.get('/api/projects/:id/files/*', requireAuth, requireOwnedProject, (req, res) => {
+  const filePath = req.params[0];
+  const row = db.prepare('SELECT content, updated_at as updatedAt FROM project_files WHERE project_id = ? AND path = ?')
+    .get(req.params.id, filePath);
+  if (!row) return res.status(404).json({ error: 'Bestand niet gevonden.' });
+  res.json({ path: filePath, content: row.content, updatedAt: row.updatedAt });
+});
+
+app.put('/api/projects/:id/files', requireAuth, requireOwnedProject, (req, res) => {
+  const { files } = req.body || {};
+  if (!Array.isArray(files) || !files.length) return res.status(400).json({ error: 'Geen bestanden opgegeven.' });
+  const now = Date.now();
+  const upsert = db.prepare(`
+    INSERT INTO project_files (project_id, path, content, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(project_id, path) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at
+  `);
+  const tx = db.transaction((items) => {
+    for (const f of items) {
+      if (!f || typeof f.path !== 'string' || !f.path.trim() || typeof f.content !== 'string') continue;
+      upsert.run(req.params.id, f.path.trim(), f.content, now);
+    }
+    db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, req.params.id);
+  });
+  tx(files);
+  res.json({ ok: true, updatedAt: now });
+});
+
+app.delete('/api/projects/:id/files/*', requireAuth, requireOwnedProject, (req, res) => {
+  const filePath = req.params[0];
+  db.prepare('DELETE FROM project_files WHERE project_id = ? AND path = ?').run(req.params.id, filePath);
+  db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(Date.now(), req.params.id);
   res.json({ ok: true });
 });
 
@@ -605,6 +731,12 @@ async function handleGithubRepoFetch(parsed, token, res){
 
 // ---------- Admin: toegang & gebruikersbeheer ----------
 
+function logAuditEvent(actor, action, target, details){
+  db.prepare(
+    'INSERT INTO audit_log (actor_user_id, actor_username, action, target, details, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(actor.uid, actor.username, action, target || null, details ? JSON.stringify(details) : null, Date.now());
+}
+
 app.get('/api/admin/access', requireAuth, requireAdmin, (req, res) => {
   res.json({
     registrationOpen: !!getSetting('registration_code_hash'),
@@ -621,12 +753,14 @@ app.put('/api/admin/access', requireAuth, requireAdmin, (req, res) => {
   }
   setSetting('registration_code_hash', bcrypt.hashSync(code, 12));
   setSetting('registration_code_plain', code);
+  logAuditEvent(req.user, 'registratiecode_gewijzigd');
   res.json({ ok: true });
 });
 
 app.delete('/api/admin/access', requireAuth, requireAdmin, (req, res) => {
   deleteSetting('registration_code_hash');
   deleteSetting('registration_code_plain');
+  logAuditEvent(req.user, 'registratiecode_verwijderd');
   res.json({ ok: true });
 });
 
@@ -640,8 +774,18 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (targetId === req.user.uid) {
     return res.status(400).json({ error: 'Je kunt je eigen account hier niet verwijderen.' });
   }
+  const target = db.prepare('SELECT username FROM users WHERE id = ?').get(targetId);
   db.prepare('DELETE FROM users WHERE id = ?').run(targetId);
+  if (target) logAuditEvent(req.user, 'gebruiker_verwijderd', target.username);
   res.json({ ok: true });
+});
+
+// Puur-lezend logboek van beheerdersacties — nooit via de app te wijzigen.
+app.get('/api/admin/audit-log', requireAuth, requireAdmin, (req, res) => {
+  const rows = db.prepare(
+    'SELECT id, actor_username as actorUsername, action, target, details, created_at as createdAt FROM audit_log ORDER BY created_at DESC LIMIT 200'
+  ).all();
+  res.json(rows.map(r => ({ ...r, details: r.details ? JSON.parse(r.details) : null })));
 });
 
 // ---------- AI-provider proxy ----------
@@ -740,8 +884,13 @@ app.get('*', (req, res) => {
 // 500-crash — belangrijk voor `/api/...`-routes, die de frontend anders
 // niet netjes kan tonen. Moet als allerlaatste middleware staan.
 app.use((err, req, res, next) => {
-  console.error('Onverwachte serverfout bij', req.method, req.path, ':', err);
   if (res.headersSent) return next(err);
+  // Te groot verzoek (body-parser's limit overschreden) — apart afvangen
+  // voor een duidelijke 413 met nette melding i.p.v. een kale 500.
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Verzoek te groot voor dit endpoint.' });
+  }
+  console.error('Onverwachte serverfout bij', req.method, req.path, ':', err);
   res.status(500).json({ error: 'Interne serverfout: ' + (err && err.message ? err.message : 'onbekend') });
 });
 

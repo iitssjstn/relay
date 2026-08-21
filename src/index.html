@@ -137,6 +137,26 @@
     animation: thinking-spin 0.8s linear infinite;
   }
 
+  .project-file-list{ flex:1; overflow-y:auto; padding: 10px 14px; }
+  .project-file-list-empty{
+    color: var(--text-faint); font-size:12.5px; text-align:center;
+    padding: 30px 10px; line-height:1.6;
+  }
+  .project-file-row{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding: 9px 11px; border: 1px solid var(--border-soft); border-radius:8px;
+    margin-bottom:6px; cursor:pointer; background: var(--panel-2);
+  }
+  .project-file-row:hover{ border-color: var(--text-faint); }
+  .project-file-row-name{
+    font-family: var(--font-mono); font-size:12.5px; color: var(--text);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .project-file-row-meta{ font-size:10.5px; color: var(--text-faint); flex-shrink:0; }
+  .project-file-list-toolbar{
+    display:flex; gap:8px; margin-bottom:10px;
+  }
+
   @media (max-width: 860px){
     .artifact-panel{
       position:fixed; inset:0; z-index:60;
@@ -1166,6 +1186,7 @@
     <div class="chat-header">
       <div class="chat-header-title">Gesprek</div>
       <div style="display:flex; align-items:center; gap:10px;">
+        <button class="icon-btn" id="projectLinkBtn" title="Dit gesprek koppelen aan een project">📁 geen project</button>
         <span class="active-badge none" id="activeBadge">geen AI actief</span>
         <div class="header-actions">
           <button class="icon-btn" id="compressConvBtn" title="Ouder deel van dit gesprek samenvatten om tokens te besparen" style="display:none;">comprimeer</button>
@@ -1206,6 +1227,7 @@
 
   <aside class="artifact-panel" id="artifactPanel">
     <div class="artifact-panel-header">
+      <button type="button" class="code-file-btn" id="projectBackBtn" style="display:none;">← project</button>
       <span class="artifact-panel-name" id="artifactPanelName"></span>
       <div class="artifact-panel-actions">
         <span class="artifact-panel-viewtoggle" id="artifactViewToggle" style="display:none;">
@@ -1218,6 +1240,7 @@
         <button type="button" class="artifact-panel-close" id="artifactPanelCloseBtn" title="Sluiten">✕</button>
       </div>
     </div>
+    <div class="project-file-list" id="projectFileList" style="display:none;"></div>
     <pre class="artifact-panel-body" id="artifactCodeView"><code id="artifactPanelCode"></code></pre>
     <iframe class="artifact-preview-frame" id="artifactPreviewFrame" style="display:none;" sandbox="allow-scripts" title="Voorbeeld"></iframe>
     <div class="artifact-run-output" id="artifactRunOutput" style="display:none;"></div>
@@ -1424,6 +1447,30 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="projectPickerOverlay" style="display:none;">
+  <div class="modal" style="max-width:420px;">
+    <h2>Project koppelen</h2>
+    <div class="modal-sub">Bestanden die de AI in dit gesprek aanmaakt of bijwerkt, belanden dan in dit project — als een steeds actuele bestandenset, los van het gesprek zelf.</div>
+
+    <div class="field" id="projectPickerListWrap">
+      <label>Bestaand project</label>
+      <div id="projectPickerList" style="max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:5px;"></div>
+    </div>
+
+    <div class="field">
+      <label>Of maak een nieuw project aan</label>
+      <input id="projectPickerNewName" type="text" placeholder="Bijv. Mijn portfolio-website">
+    </div>
+
+    <div id="projectPickerMsg" style="display:none; font-size:11.5px; margin-top:4px; margin-bottom:6px; line-height:1.4;"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="projectPickerCancelBtn">Annuleren</button>
+      <button class="btn btn-primary" id="projectPickerCreateBtn">Aanmaken &amp; koppelen</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="compressPreviewOverlay" style="display:none;">
   <div class="modal" style="max-width:520px;">
     <h2>Gesprek comprimeren</h2>
@@ -1528,6 +1575,29 @@
 
   function buildSystemText(){
     const parts = [FILE_FORMAT_INSTRUCTION, LARGE_TASK_HONESTY_INSTRUCTION];
+    // Is dit gesprek aan een project gekoppeld? Laat de AI dan de ACTUELE
+    // stand van de bestanden zien — net zoals een editor/IDE altijd van
+    // de schijf leest, niet van een oude versie ergens terug in de
+    // chatgeschiedenis. Begrensd in totale grootte, anders zou een groot
+    // project bij ieder bericht een enorme hoeveelheid context opeisen.
+    const PROJECT_CONTEXT_MAX_CHARS = 60000;
+    if (currentProjectId && currentProjectFilesCache.length) {
+      const totalChars = currentProjectFilesCache.reduce((n, f) => n + f.content.length, 0);
+      if (totalChars <= PROJECT_CONTEXT_MAX_CHARS) {
+        const listing = currentProjectFilesCache.map(f => f.path + '\n```\n' + f.content + '\n```').join('\n\n');
+        parts.push(
+          'Dit gesprek is gekoppeld aan het project "' + currentProjectName + '". Dit zijn de HUIDIGE, actuele bestanden — behandel dit als de waarheid over wat er al bestaat, niet iets uit de chatgeschiedenis hierboven. Werk je een bestand bij, gebruik dan exact hetzelfde pad — dat vervangt de inhoud, in plaats van er een nieuwe versie naast te zetten.\n\n' + listing
+        );
+      } else {
+        // Te groot om volledig mee te sturen — toon in elk geval welke
+        // bestanden er al zijn, zodat de AI er tenminste naar kan vragen
+        // of ermee rekening kan houden qua structuur/naamgeving.
+        const pathList = currentProjectFilesCache.map(f => f.path).join('\n');
+        parts.push(
+          'Dit gesprek is gekoppeld aan het project "' + currentProjectName + '". Dat project is inmiddels te groot om alle bestanden volledig mee te sturen; dit zijn wel de bestandsnamen die al bestaan (houd hier rekening mee, bv. geen dubbele namen):\n\n' + pathList
+        );
+      }
+    }
     if (memoryEntries.length) {
       // Gegroepeerd per categorie tonen, net als bij Claude's eigen
       // geheugenscherm — en expliciet omkaderen als passieve achtergrondinfo
@@ -1559,6 +1629,14 @@
   let convIndex = [];      // [{id, title, updatedAt}], newest first
   let pendingImages = [];  // dataURLs, klaar om met het volgende bericht mee te sturen
   let pendingFiles = [];   // {name, path, content}, klaar om mee te sturen (bv. GitHub-bestanden)
+
+  // ---------- Projecten: een persistente bestandenset, los van een los
+  // gesprek. De bestanden zijn de waarheid; het gesprek verwijst er
+  // alleen naar (zie ook buildSystemText hierboven, die deze cache
+  // gebruikt om de AI de actuele stand te laten zien). ----------
+  let currentProjectId = null;
+  let currentProjectName = null;
+  let currentProjectFilesCache = []; // [{path, content}] — bijgewerkt bij laden/koppelen en na elk AI-antwoord dat bestanden aanmaakt
 
   const $ = (id) => document.getElementById(id);
   const nodeList = $('nodeList');
@@ -2142,8 +2220,34 @@
       renderConvList();
       closeMobileSidebar();
       closeArtifactPanel();
+      await applyProjectLinkFromConversation(data.projectId);
       return true;
     } catch (e) { return false; }
+  }
+
+  // Zet de project-koppeling van het GELADEN gesprek klaar (knoptekst,
+  // bestandencache) — apart, want zowel het laden van een bestaand
+  // gesprek als het aanmaken van een nieuw gesprek moet dit doen.
+  async function applyProjectLinkFromConversation(projectId){
+    if (!projectId) {
+      currentProjectId = null;
+      currentProjectName = null;
+      currentProjectFilesCache = [];
+      updateProjectButton();
+      return;
+    }
+    try {
+      const projects = await apiFetch('/api/projects');
+      const match = projects.find(p => p.id === projectId);
+      currentProjectId = projectId;
+      currentProjectName = match ? match.name : 'Project';
+      updateProjectButton();
+      await refreshProjectFilesCache();
+    } catch (e) {
+      currentProjectId = null;
+      currentProjectName = null;
+      updateProjectButton();
+    }
   }
 
   async function deleteConversationById(id){
@@ -2167,6 +2271,10 @@
     closeMobileSidebar();
     closeArtifactPanel();
     updateCompressButtonVisibility();
+    currentProjectId = null;
+    currentProjectName = null;
+    currentProjectFilesCache = [];
+    updateProjectButton();
   }
 
   function renderFullConversation(){
@@ -2518,7 +2626,8 @@
     }
   }
 
-  function showArtifact(filename, content){
+  function showArtifact(filename, content, opts){
+    opts = opts || {};
     currentArtifact = { filename, content };
     $('artifactPanelName').textContent = filename;
     $('artifactPanelCode').textContent = content;
@@ -2526,6 +2635,13 @@
     if (isMobileDevice()) closeMobileSidebar();
     $('artifactRunOutput').style.display = 'none';
     $('artifactRunOutput').innerHTML = '';
+    $('projectFileList').style.display = 'none';
+    $('artifactPanelCopyBtn').style.display = '';
+    $('artifactPanelDownloadBtn').style.display = '';
+    // Kwam dit bestand uit de projectbestanden-lijst? Toon dan een
+    // terugknop, zodat je makkelijk weer bij het overzicht komt i.p.v.
+    // helemaal te moeten sluiten en opnieuw te openen.
+    $('projectBackBtn').style.display = opts.fromProjectBrowser ? 'inline-flex' : 'none';
 
     const runLang = runnableLanguageFor(filename);
     $('artifactRunBtn').style.display = runLang ? 'inline-flex' : 'none';
@@ -2537,6 +2653,7 @@
     } else {
       artifactViewToggle.style.display = 'none';
       setArtifactView('code');
+      artifactCodeView.style.display = 'block';
     }
   }
   function closeArtifactPanel(){
@@ -2546,6 +2663,165 @@
   }
   $('artifactViewCodeBtn').addEventListener('click', () => setArtifactView('code'));
   $('artifactViewPreviewBtn').addEventListener('click', () => setArtifactView('preview'));
+  $('projectBackBtn').addEventListener('click', () => showProjectFilesPanel());
+
+  // Lost een relatief pad (bv. "style.css" of "../css/main.css") op t.o.v.
+  // de map van het HTML-bestand waarin het genoemd wordt — nodig om de
+  // juiste bestanden uit het project te vinden voor de samengevoegde
+  // voorvertoning hieronder.
+  function resolveRelativePath(basePath, relPath){
+    if (/^(https?:)?\/\//i.test(relPath) || relPath.startsWith('data:')) return null; // extern, niet aanraken
+    const baseDir = basePath.includes('/') ? basePath.slice(0, basePath.lastIndexOf('/')) : '';
+    const parts = (baseDir ? baseDir.split('/') : []).concat(relPath.split('/'));
+    const resolved = [];
+    for (const part of parts) {
+      if (part === '' || part === '.') continue;
+      if (part === '..') resolved.pop();
+      else resolved.push(part);
+    }
+    return resolved.join('/');
+  }
+
+  // Bouwt van een HELE set projectbestanden één werkende pagina: zoekt
+  // een HTML-startpunt (bij voorkeur index.html), en vervangt <link>-CSS
+  // en <script src>-verwijzingen naar bestanden die ook in het project
+  // zitten door hun daadwerkelijke inhoud. Werkt voor een gewone
+  // statische site (HTML/CSS/JS) — niet voor iets met een eigen
+  // bouwstap (React/JSX, een Node-backend, etc.), dat is een bewuste,
+  // eerlijke grens van deze eenvoudige aanpak.
+  function buildProjectPreviewHtml(files){
+    const fileMap = new Map(files.map(f => [f.path, f.content]));
+    const entry = fileMap.has('index.html') ? 'index.html' : (files.find(f => /\.html?$/i.test(f.path)) || {}).path;
+    if (!entry) return null;
+    let html = fileMap.get(entry);
+
+    html = html.replace(/<link\b[^>]*rel=["']stylesheet["'][^>]*>/gi, (tag) => {
+      const m = /href=["']([^"']+)["']/i.exec(tag);
+      if (!m) return tag;
+      const resolved = resolveRelativePath(entry, m[1]);
+      return (resolved && fileMap.has(resolved)) ? ('<style>\n' + fileMap.get(resolved) + '\n</style>') : tag;
+    });
+
+    html = html.replace(/<script\b([^>]*)\ssrc=["']([^"']+)["']([^>]*)>\s*<\/script>/gi, (tag, before, src, after) => {
+      const resolved = resolveRelativePath(entry, src);
+      return (resolved && fileMap.has(resolved)) ? ('<script' + before + after + '>\n' + fileMap.get(resolved) + '\n<\/script>') : tag;
+    });
+
+    return { entry, html };
+  }
+
+  // Haalt de VOLLEDIGE inhoud van alle bestanden in een project op — één
+  // plek voor deze aanpak, gebruikt door zowel de ZIP-knop als de
+  // project-brede voorvertoning hieronder.
+  async function fetchAllProjectFileContents(projectId, fileList){
+    return Promise.all(fileList.map(async f => {
+      const r = await apiFetch('/api/projects/' + encodeURIComponent(projectId) + '/files/' + f.path.split('/').map(encodeURIComponent).join('/'));
+      return { path: f.path, content: r.content };
+    }));
+  }
+
+  // Toont de VOLLEDIGE, actuele bestandenlijst van het gekoppelde project
+  // — geen losse kaartjes verspreid door de chatgeschiedenis, maar één
+  // plek met de huidige stand, zoals een normale bestandenverkenner.
+  async function showProjectFilesPanel(){
+    if (!currentProjectId) return;
+    currentArtifact = null;
+    appRoot.classList.add('artifact-open');
+    if (isMobileDevice()) closeMobileSidebar();
+    $('artifactPanelName').textContent = '📁 ' + currentProjectName;
+    $('projectBackBtn').style.display = 'none';
+    artifactViewToggle.style.display = 'none';
+    $('artifactRunBtn').style.display = 'none';
+    $('artifactRunOutput').style.display = 'none';
+    $('artifactPanelCopyBtn').style.display = 'none';
+    $('artifactPanelDownloadBtn').style.display = 'none';
+    artifactCodeView.style.display = 'none';
+    artifactPreviewFrame.style.display = 'none';
+    const listEl = $('projectFileList');
+    listEl.style.display = 'block';
+    listEl.innerHTML = '<div class="project-file-list-empty">Laden...</div>';
+    try {
+      const files = await apiFetch('/api/projects/' + encodeURIComponent(currentProjectId) + '/files');
+      if (!files.length) {
+        listEl.innerHTML = '<div class="project-file-list-empty">Nog geen bestanden in dit project — die verschijnen hier zodra de AI iets aanmaakt in een gesprek dat aan dit project gekoppeld is.</div>';
+        return;
+      }
+      const toolbar = document.createElement('div');
+      toolbar.className = 'project-file-list-toolbar';
+
+      const hasHtmlEntry = files.some(f => f.path.toLowerCase() === 'index.html') || files.some(f => /\.html?$/i.test(f.path));
+      if (hasHtmlEntry) {
+        const previewBtn = document.createElement('button');
+        previewBtn.type = 'button';
+        previewBtn.className = 'ghost-btn';
+        previewBtn.textContent = '▶ Voorbeeld';
+        previewBtn.addEventListener('click', async () => {
+          previewBtn.textContent = 'Bezig...';
+          try {
+            const full = await fetchAllProjectFileContents(currentProjectId, files);
+            showProjectPreview(full);
+          } finally { previewBtn.textContent = '▶ Voorbeeld'; }
+        });
+        toolbar.appendChild(previewBtn);
+      }
+
+      const zipBtn = document.createElement('button');
+      zipBtn.type = 'button';
+      zipBtn.className = 'ghost-btn';
+      zipBtn.textContent = 'Alle ' + files.length + ' bestanden als ZIP';
+      zipBtn.addEventListener('click', async () => {
+        zipBtn.textContent = 'Bezig...';
+        try {
+          const full = await fetchAllProjectFileContents(currentProjectId, files);
+          const zip = new window.JSZip();
+          full.forEach(f => zip.file(f.path, f.content));
+          const blob = await zip.generateAsync({ type: 'blob' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = currentProjectName.replace(/[^a-z0-9\-_. ]/gi, '').trim().replace(/\s+/g, '-') + '.zip';
+          document.body.appendChild(a); a.click(); a.remove();
+          URL.revokeObjectURL(url);
+        } finally { zipBtn.textContent = 'Alle ' + files.length + ' bestanden als ZIP'; }
+      });
+      toolbar.appendChild(zipBtn);
+      listEl.innerHTML = '';
+      listEl.appendChild(toolbar);
+      files.forEach(f => {
+        const row = document.createElement('div');
+        row.className = 'project-file-row';
+        row.innerHTML = `<span class="project-file-row-name">${escapeHtml(f.path)}</span><span class="project-file-row-meta">${f.size} tekens</span>`;
+        row.addEventListener('click', async () => {
+          const full = await apiFetch('/api/projects/' + encodeURIComponent(currentProjectId) + '/files/' + f.path.split('/').map(encodeURIComponent).join('/'));
+          showArtifact(f.path, full.content, { fromProjectBrowser: true });
+        });
+        listEl.appendChild(row);
+      });
+    } catch (e) {
+      listEl.innerHTML = '<div class="project-file-list-empty">Kon projectbestanden niet laden: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  // Voegt alle projectbestanden samen tot één werkende pagina en toont
+  // die — het HELE project live bekijken, niet alleen een los bestand.
+  function showProjectPreview(files){
+    const built = buildProjectPreviewHtml(files);
+    if (!built) {
+      showToast('Geen HTML-bestand gevonden om een voorbeeld van te maken.', 'info');
+      return;
+    }
+    currentArtifact = null;
+    $('artifactPanelName').textContent = '▶ ' + currentProjectName + ' (' + built.entry + ')';
+    $('projectBackBtn').style.display = 'inline-flex';
+    $('projectFileList').style.display = 'none';
+    artifactCodeView.style.display = 'none';
+    artifactViewToggle.style.display = 'none';
+    // sandbox="allow-scripts" zonder allow-same-origin: draait volledig
+    // geïsoleerd, geen toegang tot Relay zelf of het echte internet voor
+    // wat de pagina zelf betreft — hetzelfde uitgangspunt als bij de
+    // losse-bestand-voorvertoning.
+    artifactPreviewFrame.style.display = 'block';
+    artifactPreviewFrame.srcdoc = built.html;
+  }
 
   // Code écht laten draaien — via E2B, in een geïsoleerde sandbox ver van
   // deze server. Toont stdout/stderr (en eventuele rijke output, zoals
@@ -3269,6 +3545,68 @@
     return md;
   }
 
+  // ---------- Project koppelen/bekijken ----------
+
+  $('projectLinkBtn').addEventListener('click', () => {
+    if (currentProjectId) { showProjectFilesPanel(); return; }
+    openProjectPicker();
+  });
+
+  async function openProjectPicker(){
+    $('projectPickerNewName').value = '';
+    $('projectPickerMsg').style.display = 'none';
+    $('projectPickerList').innerHTML = '<div class="project-file-list-empty">Laden...</div>';
+    $('projectPickerOverlay').style.display = 'flex';
+    try {
+      const projects = await apiFetch('/api/projects');
+      if (!projects.length) {
+        $('projectPickerListWrap').style.display = 'none';
+      } else {
+        $('projectPickerListWrap').style.display = 'block';
+        $('projectPickerList').innerHTML = '';
+        projects.forEach(p => {
+          const row = document.createElement('div');
+          row.className = 'project-file-row';
+          row.innerHTML = `<span class="project-file-row-name">📁 ${escapeHtml(p.name)}</span><span class="project-file-row-meta">${p.fileCount} bestand${p.fileCount === 1 ? '' : 'en'}</span>`;
+          row.addEventListener('click', async () => {
+            await linkConversationToProject(p.id, p.name);
+            $('projectPickerOverlay').style.display = 'none';
+          });
+          $('projectPickerList').appendChild(row);
+        });
+      }
+    } catch (e) {
+      $('projectPickerList').innerHTML = '';
+      $('projectPickerListWrap').style.display = 'none';
+    }
+  }
+
+  $('projectPickerCancelBtn').addEventListener('click', () => { $('projectPickerOverlay').style.display = 'none'; });
+  $('projectPickerOverlay').addEventListener('click', (e) => { if (e.target === $('projectPickerOverlay')) $('projectPickerOverlay').style.display = 'none'; });
+
+  $('projectPickerCreateBtn').addEventListener('click', async () => {
+    const name = $('projectPickerNewName').value.trim();
+    if (!name) {
+      $('projectPickerMsg').textContent = 'Geef het nieuwe project een naam.';
+      $('projectPickerMsg').style.color = 'var(--danger)';
+      $('projectPickerMsg').style.display = 'block';
+      return;
+    }
+    const btn = $('projectPickerCreateBtn');
+    btn.disabled = true;
+    try {
+      const created = await apiFetch('/api/projects', { method: 'POST', body: { name } });
+      await linkConversationToProject(created.id, created.name);
+      $('projectPickerOverlay').style.display = 'none';
+    } catch (e) {
+      $('projectPickerMsg').textContent = 'Aanmaken mislukt: ' + e.message;
+      $('projectPickerMsg').style.color = 'var(--danger)';
+      $('projectPickerMsg').style.display = 'block';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   $('exportConvBtn').addEventListener('click', () => {
     if (!conversation.length) { showToast('Nog geen gesprek om te exporteren.', 'info'); return; }
     const title = titleFromConversation(conversation).replace(/[^a-z0-9\-_. ]/gi, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'gesprek';
@@ -3282,6 +3620,58 @@
 
   function updateCompressButtonVisibility(){
     $('compressConvBtn').style.display = conversation.length >= COMPRESS_MIN_MESSAGES ? 'inline-flex' : 'none';
+  }
+
+  function updateProjectButton(){
+    $('projectLinkBtn').textContent = currentProjectId ? ('📁 ' + currentProjectName) : '📁 geen project';
+    $('projectLinkBtn').title = currentProjectId
+      ? 'Projectbestanden bekijken (' + currentProjectName + ')'
+      : 'Dit gesprek koppelen aan een project';
+  }
+
+  // Haalt de volledige, actuele inhoud van alle projectbestanden op — de
+  // cache die de AI via buildSystemText te zien krijgt, zodat ze altijd
+  // van de "actuele schijf" leest i.p.v. van een oude versie ergens
+  // terug in de chatgeschiedenis.
+  async function refreshProjectFilesCache(){
+    if (!currentProjectId) { currentProjectFilesCache = []; return; }
+    try {
+      const list = await apiFetch('/api/projects/' + encodeURIComponent(currentProjectId) + '/files');
+      const files = await Promise.all(list.map(async f => {
+        const full = await apiFetch('/api/projects/' + encodeURIComponent(currentProjectId) + '/files/' + f.path.split('/').map(encodeURIComponent).join('/'));
+        return { path: f.path, content: full.content };
+      }));
+      currentProjectFilesCache = files;
+    } catch (e) {
+      console.error('Projectbestanden laden mislukt:', e.message);
+    }
+  }
+
+  async function linkConversationToProject(projectId, projectName){
+    if (!currentConvId) return;
+    await apiFetch('/api/conversations/' + encodeURIComponent(currentConvId) + '/project', {
+      method: 'PUT', body: { projectId }
+    });
+    currentProjectId = projectId;
+    currentProjectName = projectName;
+    updateProjectButton();
+    await refreshProjectFilesCache();
+  }
+
+  // Schrijft bestanden die de AI zojuist aanmaakte/bijwerkte weg naar het
+  // gekoppelde project — hetzelfde pad opnieuw gebruiken VERVANGT de
+  // inhoud (zie server), precies zoals een normaal bestandssysteem werkt.
+  async function syncFilesToProject(files){
+    if (!currentProjectId || !files || !files.length) return;
+    try {
+      await apiFetch('/api/projects/' + encodeURIComponent(currentProjectId) + '/files', {
+        method: 'PUT', body: { files: files.map(f => ({ path: f.path, content: f.content })) }
+      });
+      await refreshProjectFilesCache();
+    } catch (e) {
+      console.error('Synchroniseren naar project mislukt:', e.message);
+      showToast('Bestanden konden niet naar het project worden weggeschreven.');
+    }
   }
 
   let pendingCompressSplit = null; // hoeveel berichten straks vervangen worden, tot de gebruiker bevestigt
@@ -3611,6 +4001,14 @@
         // bericht gewoon nog een kans krijgt.
         maybeGenerateConversationTitle(node, currentConvId, lastUserText, replyText);
         updateCompressButtonVisibility();
+        // Bestanden die dit antwoord opleverde (zowel tekst-gedetecteerde
+        // als via de create_files-tool) horen, als er een project
+        // gekoppeld is, ook daadwerkelijk in dat project terecht te komen
+        // — niet alleen als los kaartje in dit ene bericht.
+        if (currentProjectId) {
+          const allFiles = [...(generatedFiles || []), ...(toolFiles || [])];
+          if (allFiles.length) syncFilesToProject(allFiles);
+        }
         return;
       } catch (err) {
         currentAbortController = null;

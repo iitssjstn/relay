@@ -64,6 +64,34 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+
+  -- Een Project is een persistente, benoemde bestandenset — los van een
+  -- los gesprek. De bestanden ZIJN de waarheid over het project; een
+  -- gesprek verwijst er alleen naar (via conversations.project_id), net
+  -- zoals bij een echte werkmap i.p.v. alles plat in de chatgeschiedenis
+  -- te laten meeslepen.
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+
+  -- Eén rij per (project, pad) — een bestand opnieuw wegschrijven onder
+  -- hetzelfde pad VERVANGT de inhoud, in plaats van een nieuwe versie
+  -- ernaast te zetten. Dat is precies het punt: altijd de actuele stand,
+  -- geen opeenstapeling van eerdere versies door de tijd heen.
+  CREATE TABLE IF NOT EXISTS project_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL,
+    UNIQUE(project_id, path)
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id);
 `);
 
 // Migratie: 'memory' kolom toevoegen aan bestaande installaties die 'm nog
@@ -80,6 +108,15 @@ if (!userColumns.includes('memory_auto_update')) {
 }
 if (!userColumns.includes('e2b_api_key')) {
   db.exec("ALTER TABLE users ADD COLUMN e2b_api_key TEXT");
+}
+
+const conversationColumns = db.prepare("PRAGMA table_info(conversations)").all().map(c => c.name);
+if (!conversationColumns.includes('project_id')) {
+  // Geen FK-constraint hierop (SQLite kan die niet met ALTER TABLE
+  // toevoegen aan een bestaande tabel) — de applicatie zelf bewaakt de
+  // integriteit; bij het verwijderen van een project wordt dit veld voor
+  // gekoppelde gesprekken expliciet op NULL gezet, zie index.js.
+  db.exec("ALTER TABLE conversations ADD COLUMN project_id TEXT");
 }
 
 // Eenmalige migratie: bestaande (oude, ongestructureerde) geheugentekst
