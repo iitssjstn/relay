@@ -39,6 +39,39 @@ Vanuit hetzelfde beheerscherm kun je:
 De registratiecode wordt nooit in platte tekst opgeslagen — alleen de
 bcrypt-hash ervan, in de database.
 
+## Automatisch bouwen via GitHub Actions
+
+Dit repo bevat een workflow (`.github/workflows/docker-publish.yml`)
+die bij elke push naar `main` automatisch een Docker image bouwt en
+publiceert naar GitHub Container Registry (`ghcr.io`). Daardoor hoef
+je op de VPS nooit lokaal te bouwen — je pullt gewoon het kant-en-klare
+image.
+
+**Eenmalig instellen, nadat je dit naar je eigen GitHub-repo hebt gepusht:**
+
+1. Push naar `main` — de workflow draait automatisch (te volgen onder
+   het tabblad *Actions* van je repo) en publiceert
+   `ghcr.io/<jouw-gebruikersnaam>/<repo-naam>:latest`.
+2. Ga naar je GitHub-profiel → *Packages* → het package dat net is
+   aangemaakt → *Package settings* → zet zichtbaarheid op **Public**
+   (anders moet de VPS ook inloggen bij ghcr.io om te kunnen pullen).
+3. Pas in `docker-compose.yml` de regel `image:` aan naar
+   `ghcr.io/<jouw-gebruikersnaam>/<repo-naam>:latest` (staat al goed
+   als je gebruikersnaam/repo `iitssjstn/relay` is).
+
+**Updaten op de VPS gaat vanaf dan zo:**
+
+```bash
+docker compose pull relay
+docker compose up -d relay
+```
+
+Geen `git pull`, geen rebuild — je haalt gewoon de laatste gepubliceerde
+image binnen. Accounts en gesprekken blijven staan, die leven in de
+`relay-data`-map (zie hieronder), niet in het image.
+
+## Starten (achter Nginx Proxy Manager)
+
 **Stap 1 — `docker-compose.yml`.**
 
 ```yaml
@@ -72,13 +105,25 @@ networks:
     name: npm_network   # <-- de echte naam van jouw NPM-netwerk
 ```
 
-**Stap 2 — start de container.**
+**Stap 2 — maak de data-map aan en zet 'm klaar voor de container.**
+
+De container draait bewust niet als root. Daarom moet de map die je
+zo dadelijk koppelt, al bestaan én eigendom zijn van uid/gid 1000
+(de gebruiker waarmee de container draait) — anders kan Relay niet
+in zijn eigen database schrijven en start de app niet op:
+
+```bash
+mkdir -p ./relay-data
+sudo chown -R 1000:1000 ./relay-data
+```
+
+**Stap 3 — start de container.**
 
 ```bash
 docker compose up -d
 ```
 
-**Stap 3 — voeg een Proxy Host toe in NPM.**
+**Stap 4 — voeg een Proxy Host toe in NPM.**
 
 In de NPM-webinterface: *Proxy Hosts → Add Proxy Host*
 - Domain Names: bijv. `relay.jouwdomein.nl`
@@ -90,7 +135,7 @@ In de NPM-webinterface: *Proxy Hosts → Add Proxy Host*
 
 Daarna is de app bereikbaar op `https://relay.jouwdomein.nl`.
 
-**Stap 4 — open de site en maak je (beheerders-)account aan.**
+**Stap 5 — open de site en maak je (beheerders-)account aan.**
 
 Zie "Accounts en toegang" hierboven.
 
@@ -99,6 +144,17 @@ Stoppen:
 ```bash
 docker compose down
 ```
+
+**Werkt de container niet, of blijft hij steeds herstarten?** Controleer
+eerst de status en gezondheid:
+
+```bash
+docker compose ps        # 'healthy' zodra /healthz goed antwoordt
+docker compose logs relay
+```
+
+Zie je een schrijffout naar `/app/data` in de logs, dan is stap 2
+hierboven (de `chown`) waarschijnlijk overgeslagen.
 
 ## Gebruik
 
@@ -124,6 +180,12 @@ docker compose down
   daarvan niet — hij stuurt 'm alleen gestreamd door.
 - Wachtwoorden én de registratiecode worden gehasht opgeslagen
   (bcrypt), nooit in platte tekst.
+- Inloggen/registreren is beperkt (rate limiting) tegen herhaald
+  geautomatiseerd gokken; beveiligingsheaders (CSP, HSTS e.a.) staan
+  standaard aan.
+- Beheerdersacties (registratiecode wijzigen, gebruiker verwijderen)
+  worden gelogd — te bekijken via Accountmenu → Beheer → "Toon
+  logboek".
 - Zorg dat de Proxy Host in NPM SSL afdwingt ("Force SSL"), zodat
   wachtwoorden en API-keys niet onversleuteld over het netwerk gaan.
 - Gebruik alleen API-keys waar je zelf recht toe hebt, en geef de
@@ -143,10 +205,13 @@ herpubliceren kan daarmee in strijd zijn.
 ```
 .
 ├── .github/
+│   ├── dependabot.yml       # houdt npm/Actions/baseimage automatisch actueel
 │   └── workflows/
 │       └── docker-publish.yml  # bouwt & publiceert image naar ghcr.io
-├── Dockerfile           # node:20-alpine, draait server/index.js
-├── docker-compose.yml   # één service, pullt image van ghcr.io
+├── .dockerignore
+├── .env.example         # optionele technische configuratie (nooit admin-credentials)
+├── Dockerfile            # multi-stage node:20-alpine, draait als niet-root
+├── docker-compose.yml    # één service, pullt image van ghcr.io
 ├── server/
 │   ├── index.js           # Express-API: auth, admin, gesprekken, instellingen
 │   ├── db.js                # SQLite-schema
