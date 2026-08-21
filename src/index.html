@@ -2009,6 +2009,7 @@
       msgEl.style.color = 'var(--relay-green)'; msgEl.style.display = 'block';
       $('e2bTokenInput').value = '';
       $('e2bTokenStatus').textContent = token ? 'Er staat een API-key ingesteld.' : 'Nog geen API-key ingesteld.';
+      hasE2BKey = !!token;
     } catch (e) {
       msgEl.textContent = 'Opslaan mislukt: ' + e.message;
       msgEl.style.color = 'var(--danger)'; msgEl.style.display = 'block';
@@ -2147,6 +2148,16 @@
     catch (e) { console.error('Instellingen opslaan mislukt:', e.message); showToast('Kon je AI-instellingen niet opslaan — controleer je verbinding.'); }
   }
 
+  // Bijgehouden op app-niveau (niet alleen binnen het E2B-tokenscherm zelf)
+  // zodat 'automatisch testen' vooraf kan checken of dat überhaupt zin
+  // heeft — anders zou iedere gegenereerde bestand een "geen E2B API-key"-
+  // mislukking tonen zodra deze optie standaard aan staat.
+  let hasE2BKey = false;
+  async function refreshE2BKeyStatus(){
+    try { hasE2BKey = (await apiFetch('/api/e2b-token')).hasToken; }
+    catch (e) { hasE2BKey = false; }
+  }
+
   async function loadNodesFromServer(){
     try {
       const data = await apiFetch('/api/nodes');
@@ -2217,7 +2228,13 @@
     try {
       const prompt = 'Geef een korte, duidelijke titel (max 6 woorden) voor dit gesprek, gebaseerd op deze uitwisseling. Antwoord ALLEEN met de titel zelf — geen aanhalingstekens, geen opmaak, geen uitleg, geen punt aan het einde.\n\nGebruiker: ' + userText + '\nAI: ' + assistantText;
       const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
-      let title = (raw.text || '').trim().replace(/^["'*]+|["'*]+$/g, '').replace(/\.$/, '').replace(/\s+/g, ' ').slice(0, 60);
+      // Defensieve opschoning: mocht deze AI (net als bij de hoofdaanroep)
+      // een tool-aanroep als platte JSON uitspugen i.p.v. gewoon een
+      // titel te geven, haal die er dan sowieso uit — een titel met rauwe
+      // JSON erin is nooit wat we willen tonen. Puur opschonen hier, niet
+      // uitvoeren — een titel-poging mag nooit een echte sandbox-aanroep
+      // triggeren.
+      let title = stripFakeToolCallJson(raw.text || '').replace(/^["'*]+|["'*]+$/g, '').replace(/\.$/, '').replace(/\s+/g, ' ').slice(0, 60);
       if (!title) return;
       aiGeneratedTitles.set(convId, title);
       if (currentConvId === convId) await saveCurrentConversation();
@@ -3494,9 +3511,15 @@
     $('toggleKeyBtn').textContent = 'toon';
     $('fMaxTokens').value = node ? node.maxTokens : PROVIDER_DEFAULTS['anthropic'].maxTokens;
     $('fMaxOutput').value = node ? node.maxOutput : PROVIDER_DEFAULTS['anthropic'].maxOutput;
-    $('fExtendedThinking').checked = node ? !!node.extendedThinking : false;
+    // Standaard aan bij een NIEUWE AI (bestaande AI's houden gewoon hun
+    // eigen, eerder ingestelde waarde) — zichtbaarheid in wat de AI doet
+    // hoort erbij, niet iets dat je zelf moet ontdekken en aanzetten.
+    // extendedThinking geldt sowieso alleen voor Anthropic (zie
+    // modalSaveBtn hieronder); autoTestFiles is gratis (geen extra
+    // AI-tokens) en providerneutraal, dus die mag altijd aan.
+    $('fExtendedThinking').checked = node ? !!node.extendedThinking : true;
     $('fCanExecuteCode').checked = node ? !!node.canExecuteCode : false;
-    $('fAutoTestFiles').checked = node ? !!node.autoTestFiles : false;
+    $('fAutoTestFiles').checked = node ? !!node.autoTestFiles : true;
     $('fCreateFilesAsTool').checked = node ? !!node.createFilesAsTool : false;
     $('modalDeleteBtn').style.display = node ? 'block' : 'none';
     updateProviderHint();
@@ -4057,7 +4080,17 @@
           continuations++;
         } while (truncated && continuations < MAX_CONTINUATIONS);
 
-        const replyText = accumulated.trim() || '(Leeg antwoord ontvangen van ' + node.name + ' — dit kan wijzen op een te lage "max antwoordlengte"-instelling bij deze AI, of een probleem bij de provider zelf. Probeer het nog eens, of check de instellingen van deze AI in de Ketting.)';
+        let replyText = accumulated.trim() || '(Leeg antwoord ontvangen van ' + node.name + ' — dit kan wijzen op een te lage "max antwoordlengte"-instelling bij deze AI, of een probleem bij de provider zelf. Probeer het nog eens, of check de instellingen van deze AI in de Ketting.)';
+        // Vangnet voor modellen/providers die native function-calling niet
+        // betrouwbaar ondersteunen en de tool-aanroep als platte JSON-tekst
+        // uitspugen i.p.v. via het echte tool-mechanisme — alleen relevant
+        // als deze AI überhaupt voor zo'n tool was ingesteld. toolFiles()
+        // hieronder slaat zelf al op in dezelfde lijst die verderop voor
+        // opslaan/synchroniseren naar een project wordt gebruikt.
+        if (node.createFilesAsTool || node.canExecuteCode) {
+          const { cleaned, collectedFiles } = await processFakeToolCallsInText(replyText, streamHandle);
+          replyText = collectedFiles.length ? (cleaned || '(Bestanden geregistreerd.)') : cleaned;
+        }
         turnEnded = true; // vóórdat de rest gebeurt — een eventuele nog-lopende autosave-timer mag hierna niets meer aan het gesprek toevoegen
         liveStreamState = null;
         const generatedFiles = streamHandle.finish(replyText);
@@ -4236,6 +4269,89 @@
   // tegenstelling tot run_code) — puur de opgegeven bestanden als chips
   // tonen en een korte bevestiging teruggeven, zodat de AI weet dat het
   // gelukt is en gewoon door kan gaan met de rest van het antwoord.
+  // Sommige modellen/providers ondersteunen native function-calling niet
+  // betrouwbaar — in plaats van de tool via het echte, gestructureerde
+  // mechanisme aan te roepen, spugen ze de tool-aanroep gewoon als platte
+  // JSON-tekst uit in het antwoord zelf. Dit vangnet herkent zo'n
+  // "nep"-aanroep alsnog, verwerkt 'm op dezelfde manier als een echte
+  // tool-aanroep, en haalt de rauwe JSON uit de zichtbare tekst.
+  //
+  // Een simpele regex mist bij geneste JSON (haakjes binnen haakjes) —
+  // deze telt daarom de accolades zelf om het echte einde te vinden.
+  function findBalancedJsonEnd(text, startIdx){
+    let depth = 0, inString = false, escape = false;
+    for (let i = startIdx; i < text.length; i++) {
+      const ch = text[i];
+      if (escape) { escape = false; continue; }
+      if (ch === '\\') { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) return i + 1; }
+    }
+    return -1;
+  }
+
+  function extractFakeToolCalls(text){
+    const found = [];
+    const anchorRe = /\{\s*(?:"type"\s*:\s*"function"\s*,\s*)?"name"\s*:\s*"(create_files|run_code)"/g;
+    let m;
+    while ((m = anchorRe.exec(text))) {
+      const startIdx = m.index;
+      const endIdx = findBalancedJsonEnd(text, startIdx);
+      if (endIdx === -1) continue;
+      const raw = text.slice(startIdx, endIdx);
+      try {
+        const parsed = JSON.parse(raw);
+        const params = parsed.parameters || parsed.arguments || parsed.input || {};
+        found.push({ name: parsed.name, params, raw });
+      } catch (e) { /* geen geldige JSON — waarschijnlijk toeval, negeren */ }
+      anchorRe.lastIndex = endIdx;
+    }
+    return found;
+  }
+
+  // Verwerkt de "nep"-aanroepen die extractFakeToolCalls vond: registreert
+  // create_files-bestanden (net als een echte tool-aanroep), voert
+  // run_code daadwerkelijk uit via E2B, en haalt steeds de rauwe JSON uit
+  // de tekst die de gebruiker straks te zien krijgt.
+  // Alleen de JSON-blokken uit de tekst halen, zonder ook maar iets uit te
+  // voeren of te registreren — voor contexten zoals de titel-generatie,
+  // waar we een eventuele nep-tool-aanroep alleen willen wegpoetsen, niet
+  // (per ongeluk) een echte sandbox-aanroep willen triggeren.
+  function stripFakeToolCallJson(text){
+    const calls = extractFakeToolCalls(text);
+    let cleaned = text;
+    for (const call of calls) cleaned = cleaned.replace(call.raw, '');
+    return cleaned.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  async function processFakeToolCallsInText(text, streamHandle){
+    const calls = extractFakeToolCalls(text);
+    let cleaned = text;
+    const collectedFiles = [];
+    for (const call of calls) {
+      cleaned = cleaned.replace(call.raw, '');
+      if (call.name === 'create_files') {
+        const files = Array.isArray(call.params.files) ? call.params.files
+          .filter(f => f && typeof f.path === 'string' && typeof f.content === 'string' && f.path.trim())
+          .map(f => ({ path: f.path.trim(), content: f.content }))
+          : [];
+        if (files.length) {
+          streamHandle.toolFiles(files);
+          collectedFiles.push(...files);
+        }
+      } else if (call.name === 'run_code' && call.params.language && call.params.code) {
+        streamHandle.toolRun({ phase: 'start', language: call.params.language, code: call.params.code });
+        const execResult = await executeCodeViaE2B(call.params.language, call.params.code);
+        streamHandle.toolRun(Object.assign({ phase: 'result', language: call.params.language, code: call.params.code }, execResult));
+      }
+    }
+    // Opgeruimde witruimte die overblijft waar de JSON stond.
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+    return { cleaned, collectedFiles };
+  }
+
   function handleCreateFilesToolCall(input, opts){
     const files = Array.isArray(input.files) ? input.files
       .filter(f => f && typeof f.path === 'string' && typeof f.content === 'string' && f.path.trim())
@@ -4251,6 +4367,7 @@
   // los van het gesprek met de AI, dus zonder extra tokens te kosten. De
   // AI krijgt het resultaat niet te zien; dit is puur voor de gebruiker.
   async function autoTestGeneratedFiles(streamHandle, files){
+    if (!hasE2BKey) return; // stil overslaan i.p.v. bij elk bestand een "geen API-key"-mislukking tonen — vooral relevant nu dit standaard aan staat
     const runnable = files.filter(f => runnableLanguageFor(f.path));
     for (const f of runnable) {
       const lang = runnableLanguageFor(f.path);
@@ -4949,6 +5066,7 @@
     await loadNodesFromServer();
     await loadConvIndexFromServer();
     await loadMemoryFromServer();
+    refreshE2BKeyStatus(); // niet kritiek voor de rest van het opstarten — mag op de achtergrond
     try {
       const settings = await apiFetch('/api/memory-settings');
       memoryAutoUpdateEnabled = !!settings.autoUpdate;
