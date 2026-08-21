@@ -4474,6 +4474,12 @@
     if (t.includes('context_length_exceeded')) return true;
     if (t.includes('maximum context length')) return true;
     if (t.includes('too many tokens') || t.includes('token limit') || t.includes('context window')) return true;
+    // Nvidia NIM gebruikt een eigen formulering die geen van bovenstaande
+    // patronen raakt, bv.: "Input length 1217 exceeds maximum allowed
+    // token size 512" — zonder deze check viel dit soort fouten terug op
+    // een generieke, verwarrende afhandeling in plaats van een duidelijke
+    // "contextlimiet bereikt"-melding.
+    if (t.includes('exceeds maximum allowed token size') || (t.includes('input length') && t.includes('exceed'))) return true;
     if (providerType === 'anthropic' && t.includes('prompt is too long')) return true;
     if (providerType === 'google' && t.includes('exceeds the maximum number of tokens')) return true;
     return false;
