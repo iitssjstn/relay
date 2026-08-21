@@ -1473,6 +1473,12 @@
       <div class="conv-list" id="adminUserList" style="max-height:220px;"></div>
     </div>
 
+    <div class="field" style="margin-top:18px;">
+      <label>Logboek beheerdersacties</label>
+      <button type="button" class="ghost-btn" id="adminAuditLoadBtn" style="width:100%;">Toon logboek</button>
+      <div id="adminAuditList" style="display:none; max-height:200px; overflow-y:auto; margin-top:8px; font-family:var(--font-mono); font-size:11px; line-height:1.6; color: var(--text-dim);"></div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-secondary" id="adminCloseBtn" style="flex:1;">Sluiten</button>
     </div>
@@ -2060,13 +2066,31 @@
   function titleFromConversation(msgs){
     const firstUser = msgs.find(m => m.role === 'user');
     if (!firstUser) return 'Nieuw gesprek';
-    const t = firstUser.content.trim().replace(/\s+/g, ' ');
+    // Terugvaltitel (voordat/als de AI geen betere titel bedenkt) — haalt
+    // in elk geval codeblokken en markdown-opmaaktekens weg, anders zie
+    // je bij een bericht dat met code begint iets als "Hier: script.py
+    // ```python prin..." i.p.v. gewoon leesbare tekst.
+    const cleaned = firstUser.content
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/`([^`]*)`/g, '$1')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .trim().replace(/\s+/g, ' ');
+    const t = cleaned || firstUser.content.trim().replace(/\s+/g, ' ');
     return t.length > 42 ? t.slice(0, 42) + '…' : t;
   }
 
   // Zodra de AI een betere titel heeft bedacht (na de eerste uitwisseling),
   // staat die hier — en overschrijft dan de kale eerste-bericht-titel.
   const aiGeneratedTitles = new Map(); // convId -> titel
+  // Hoeveel keer al geprobeerd is een titel te bedenken voor een gesprek —
+  // zonder dit zou één mislukte poging (bv. door een rate limit, best
+  // gangbaar bij gratis providers) een gesprek voor altijd bij de rauwe
+  // eerste-bericht-titel laten steken. Begrensd zodat een structureel
+  // falende AI niet bij ieder bericht opnieuw blijft proberen.
+  const titleAttemptCounts = new Map(); // convId -> aantal pogingen
+  const MAX_TITLE_ATTEMPTS = 3;
 
   async function saveCurrentConversation(){
     if (!currentConvId || conversation.length === 0) return;
@@ -2084,10 +2108,15 @@
   }
 
   // Laat de zojuist-actieve AI een korte, beschrijvende titel bedenken op
-  // basis van de eerste uitwisseling — alleen bij het allereerste
-  // berichtenpaar van een gesprek, net als bij Claude/ChatGPT zelf.
+  // basis van de eerste uitwisseling. Wordt herhaald bij de eerste paar
+  // uitwisselingen van een gesprek (niet alleen de allereerste) totdat
+  // het lukt — anders blijft een gesprek na één mislukte poging (bv. een
+  // rate limit) voor altijd bij de rauwe eerste-bericht-titel steken.
   async function maybeGenerateConversationTitle(node, convId, userText, assistantText){
-    if (aiGeneratedTitles.has(convId)) return; // al gebeurd voor dit gesprek
+    if (aiGeneratedTitles.has(convId)) return; // al gelukt voor dit gesprek
+    const attempts = titleAttemptCounts.get(convId) || 0;
+    if (attempts >= MAX_TITLE_ATTEMPTS) return;
+    titleAttemptCounts.set(convId, attempts + 1);
     try {
       const prompt = 'Geef een korte, duidelijke titel (max 6 woorden) voor dit gesprek, gebaseerd op deze uitwisseling. Antwoord ALLEEN met de titel zelf — geen aanhalingstekens, geen opmaak, geen uitleg, geen punt aan het einde.\n\nGebruiker: ' + userText + '\nAI: ' + assistantText;
       const raw = await callProvider(node, [{ role: 'user', content: prompt }], { injectMemory: false });
@@ -2096,7 +2125,8 @@
       aiGeneratedTitles.set(convId, title);
       if (currentConvId === convId) await saveCurrentConversation();
     } catch (e) {
-      // Stil falen — een titel bedenken is een bonus, geen kernfunctie.
+      // Stil falen bij déze poging — bij een volgende uitwisseling
+      // (tot de bovengrens) wordt het gewoon nog eens geprobeerd.
     }
   }
 
@@ -3437,9 +3467,6 @@
   async function runTurn(lastUserText){
     sending = true;
     updateComposerState();
-    // Vóór er eventueel tussentijds een concept-antwoord in de geschiedenis
-    // belandt (zie hieronder), anders raakt deze controle in de war.
-    const isFirstExchangeOfConversation = conversation.length === 1;
     // Zodra dit true wordt, is er minstens één keer écht een verzoek naar
     // een AI verstuurd — gebruikt hieronder om te voorkomen dat een
     // (mogelijk onjuiste) schatting van de contextgrootte de hele ketting
@@ -3578,7 +3605,11 @@
         updateComposerState();
         saveCurrentConversation();
         autoUpdateMemory(node, lastUserText, replyText);
-        if (isFirstExchangeOfConversation) maybeGenerateConversationTitle(node, currentConvId, lastUserText, replyText);
+        // Niet langer beperkt tot alléén de allereerste uitwisseling — de
+        // functie zelf houdt nu bij of het al gelukt is en hoe vaak het al
+        // geprobeerd is, zodat een mislukte eerste poging bij een volgend
+        // bericht gewoon nog een kans krijgt.
+        maybeGenerateConversationTitle(node, currentConvId, lastUserText, replyText);
         updateCompressButtonVisibility();
         return;
       } catch (err) {
@@ -4696,6 +4727,33 @@
 
   $('adminBtn').addEventListener('click', openAdminModal);
   $('adminCloseBtn').addEventListener('click', () => { adminOverlay.style.display = 'none'; });
+
+  $('adminAuditLoadBtn').addEventListener('click', async () => {
+    const listEl = $('adminAuditList');
+    const btn = $('adminAuditLoadBtn');
+    btn.disabled = true;
+    btn.textContent = 'Laden...';
+    try {
+      const rows = await apiFetch('/api/admin/audit-log');
+      if (!rows.length) {
+        listEl.textContent = 'Nog geen beheerdersacties gelogd.';
+      } else {
+        listEl.innerHTML = rows.map(r => {
+          const when = new Date(r.createdAt).toLocaleString('nl-NL');
+          const targetPart = r.target ? ' → ' + escapeHtml(r.target) : '';
+          return `<div>${escapeHtml(when)} — <strong>${escapeHtml(r.actorUsername)}</strong>: ${escapeHtml(r.action)}${targetPart}</div>`;
+        }).join('');
+      }
+      listEl.style.display = 'block';
+      btn.style.display = 'none';
+    } catch (e) {
+      listEl.textContent = 'Kon logboek niet laden: ' + e.message;
+      listEl.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Toon logboek';
+    }
+  });
   adminOverlay.addEventListener('click', (e) => { if (e.target === adminOverlay) adminOverlay.style.display = 'none'; });
 
   async function openAdminModal(){
