@@ -5,6 +5,8 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const db = require('./db');
 const { getSecret } = require('./secrets');
 
@@ -29,11 +31,64 @@ if (!JWT_SECRET) {
 }
 
 const app = express();
+// Security headers — CSP is bewust afgestemd op precies wat deze app nodig
+// heeft: alle logica zit in één inline <script>/<style> in index.html (dus
+// 'unsafe-inline' nodig, er zijn hier geen nonces toegepast), plus drie
+// vaste CDN-bibliotheken (marked/DOMPurify/JSZip) en Google Fonts. Externe
+// AI-providers worden nooit rechtstreeks vanuit de browser aangeroepen —
+// dat loopt allemaal via /api/relay-proxy — dus connect-src blijft 'self'.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'self'"]
+    }
+  },
+  // Uitgeschakeld omdat dit vereist dat cross-origin bronnen (zoals de
+  // CDN-scripts hierboven) expliciet CORP/CORS-headers meesturen — dat
+  // risico op het onterecht blokkeren van die scripts weegt hier niet op
+  // tegen de beperkte meerwaarde voor een self-hosted, persoonlijke tool.
+  crossOriginEmbedderPolicy: false
+}));
 // 25mb i.p.v. 5mb — gesprekken kunnen nu base64-gecodeerde afbeeldingen
 // bevatten, die aanmerkelijk groter zijn dan platte tekst.
 app.use(express.json({ limit: '25mb' }));
 app.use(cookieParser());
 app.set('trust proxy', 1); // NPM zit ervoor als reverse proxy
+
+// Beperkt brute-force-pogingen op inloggen/registreren — ruim genoeg voor
+// eigen typefouten, maar blokkeert herhaald geautomatiseerd gokken.
+const authRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Te veel pogingen — probeer het over een kwartier opnieuw.' }
+});
+
+// ---------- Health endpoints (voor Docker HEALTHCHECK en eventuele monitoring) ----------
+
+// Simpele "leeft het proces nog"-check, zonder afhankelijkheden te raken —
+// blijft dus ook OK als de database bijvoorbeeld héél even niet reageert.
+app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
+
+// "Is de app daadwerkelijk klaar om verzoeken af te handelen" — controleert
+// of de database bereikbaar is, wat healthz bewust niet doet.
+app.get('/readyz', (req, res) => {
+  try {
+    db.prepare('SELECT 1').get();
+    res.status(200).json({ status: 'ok' });
+  } catch (e) {
+    res.status(503).json({ status: 'niet klaar', error: e.message });
+  }
+});
 
 // ---------- Settings helpers (registratiecode leeft in de database) ----------
 
@@ -101,7 +156,7 @@ app.get('/api/auth/bootstrap-status', (req, res) => {
   res.json({ bootstrap: userCount() === 0 });
 });
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', authRateLimit, (req, res) => {
   const { username, password, registrationCode } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({ error: 'Vul gebruikersnaam en wachtwoord in.' });
@@ -137,7 +192,7 @@ app.post('/api/auth/register', (req, res) => {
   res.json({ id: user.id, username: user.username, isAdmin: !!user.is_admin, isFirstUser });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', authRateLimit, (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Vul gebruikersnaam en wachtwoord in.' });
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
@@ -174,20 +229,38 @@ app.get('/api/conversations/:id', requireAuth, (req, res) => {
   res.json({ ...row, messages: JSON.parse(row.messages) });
 });
 
+function upsertConversation(userId, convId, title, messages){
+  const now = Date.now();
+  const existing = db.prepare('SELECT id FROM conversations WHERE id = ? AND user_id = ?')
+    .get(convId, userId);
+  if (existing) {
+    db.prepare('UPDATE conversations SET title = ?, updated_at = ?, messages = ? WHERE id = ? AND user_id = ?')
+      .run(title || 'Nieuw gesprek', now, JSON.stringify(messages), convId, userId);
+  } else {
+    db.prepare('INSERT INTO conversations (id, user_id, title, updated_at, messages) VALUES (?, ?, ?, ?, ?)')
+      .run(convId, userId, title || 'Nieuw gesprek', now, JSON.stringify(messages));
+  }
+  return now;
+}
+
 app.put('/api/conversations/:id', requireAuth, (req, res) => {
   const { title, messages } = req.body || {};
   if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages moet een array zijn.' });
-  const now = Date.now();
-  const existing = db.prepare('SELECT id FROM conversations WHERE id = ? AND user_id = ?')
-    .get(req.params.id, req.user.uid);
-  if (existing) {
-    db.prepare('UPDATE conversations SET title = ?, updated_at = ?, messages = ? WHERE id = ? AND user_id = ?')
-      .run(title || 'Nieuw gesprek', now, JSON.stringify(messages), req.params.id, req.user.uid);
-  } else {
-    db.prepare('INSERT INTO conversations (id, user_id, title, updated_at, messages) VALUES (?, ?, ?, ?, ?)')
-      .run(req.params.id, req.user.uid, title || 'Nieuw gesprek', now, JSON.stringify(messages));
-  }
-  res.json({ ok: true, updatedAt: now });
+  const updatedAt = upsertConversation(req.user.uid, req.params.id, title, messages);
+  res.json({ ok: true, updatedAt });
+});
+
+// Speciaal voor navigator.sendBeacon() — die kan alleen POST versturen,
+// geen PUT, en stuurt geen JSON-Content-Type mee als de payload een Blob
+// is. Wordt uitsluitend gebruikt als laatste redmiddel vlak vóórdat de
+// pagina verdwijnt (herlaadbeurt/sluiten), zodat een in-progress AI-
+// antwoord niet volledig verloren gaat — zie het 'beforeunload'-gedrag
+// aan de voorkant. Zelfde opslaglogica en autorisatie als de PUT hierboven.
+app.post('/api/conversations/:id/beacon', requireAuth, (req, res) => {
+  const { title, messages } = req.body || {};
+  if (!Array.isArray(messages)) return res.status(400).end();
+  upsertConversation(req.user.uid, req.params.id, title, messages);
+  res.status(204).end();
 });
 
 app.delete('/api/conversations/:id', requireAuth, (req, res) => {

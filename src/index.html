@@ -3256,6 +3256,11 @@
 
   let pendingCompressSplit = null; // hoeveel berichten straks vervangen worden, tot de gebruiker bevestigt
   let compressInProgress = false; // blokkeert versturen zolang comprimeren loopt — voorkomt dat de gesprek-array halverwege verandert
+  // Buiten runTurn's eigen closure bijgehouden (i.p.v. alleen lokaal),
+  // specifiek zodat de beforeunload-handler hier ook bij kan — de
+  // periodieke tussentijdse opslag loopt maar om de 4s, dus zonder dit
+  // zou een herlaadbeurt vlak daarvóór de allerlaatste tekst missen.
+  let liveStreamState = null; // { node, partialText, entryIndexInConversation }
 
   $('compressConvBtn').addEventListener('click', async () => {
     if (sending) { showToast('Wacht tot het huidige antwoord klaar is voordat je comprimeert.', 'info'); return; }
@@ -3532,6 +3537,7 @@
             partialSoFar = accumulated + partial;
             streamHandle.update(partialSoFar);
             scheduleAutosave();
+            liveStreamState = { node, partialText: partialSoFar };
           });
           // Als een "vervolg"-aanroep zelf niets nieuws opleverde, heeft
           // doorgaan geen zin — sommige providers reageren onvoorspelbaar
@@ -3547,6 +3553,7 @@
 
         const replyText = accumulated.trim() || '(Leeg antwoord ontvangen van ' + node.name + ' — dit kan wijzen op een te lage "max antwoordlengte"-instelling bij deze AI, of een probleem bij de provider zelf. Probeer het nog eens, of check de instellingen van deze AI in de Ketting.)';
         turnEnded = true; // vóórdat de rest gebeurt — een eventuele nog-lopende autosave-timer mag hierna niets meer aan het gesprek toevoegen
+        liveStreamState = null;
         const generatedFiles = streamHandle.finish(replyText);
         if (node.autoTestFiles && generatedFiles && generatedFiles.length) {
           autoTestGeneratedFiles(streamHandle, generatedFiles);
@@ -3580,6 +3587,7 @@
           // Zelf gestopt — bewaar wat er al binnen was als het antwoord,
           // in plaats van het weg te gooien of als fout te tonen.
           turnEnded = true;
+          liveStreamState = null;
           const finalText = partialSoFar.trim() || '(gestopt)';
           streamHandle.finish(finalText);
           node.status = 'done';
@@ -3602,6 +3610,7 @@
         // mislukte poging hoort niet in de geschiedenis te blijven staan;
         // de volgende AI in de ketting begint gewoon schoon.
         turnEnded = true;
+        liveStreamState = null;
         if (partialEntryIndex !== -1) {
           conversation.splice(partialEntryIndex, 1);
           partialEntryIndex = -1;
@@ -4864,6 +4873,38 @@
     if (adminOverlay.style.display === 'flex') { adminOverlay.style.display = 'none'; return; }
     if (appRoot.classList.contains('artifact-open')) { closeArtifactPanel(); return; }
     if (sidebarEl.classList.contains('open')) { closeMobileSidebar(); return; }
+  });
+
+  // ---------- Laatste redmiddel vlak vóór de pagina verdwijnt ----------
+  // Ververst of sluit iemand de pagina terwijl er nog een antwoord bezig
+  // is, dan breekt de browser die verbinding sowieso af — dat kan Relay
+  // vanuit de huidige architectuur niet voorkomen (de AI-aanroep loopt
+  // via de browser zelf, niet los op de server door). Dit beperkt het
+  // verlies wel tot een paar seconden in plaats van het hele antwoord:
+  // vlak vóór de pagina echt verdwijnt, wordt de meest recente stand
+  // (dankzij de tussentijdse opslag hierboven doorgaans van hooguit een
+  // paar seconden terug) nog snel weggeschreven. Een gewone fetch() kan
+  // de browser op dit exacte moment alsnog afbreken; sendBeacon is hier
+  // wel specifiek voor gemaakt en werkt betrouwbaarder.
+  window.addEventListener('beforeunload', () => {
+    if (!sending || !currentConvId || !conversation.length || !navigator.sendBeacon) return;
+    try {
+      let snapshotConversation = conversation;
+      if (liveStreamState && liveStreamState.partialText) {
+        // Bouw de allerlaatste stand op: is het laatste bericht al een
+        // AI-antwoord (de periodieke tussentijdse opslag was net geweest),
+        // vervang die met de nieuwste tekst; anders (nog geen tussentijdse
+        // opslag geweest) voeg 'm toe als nieuw bericht.
+        const last = conversation[conversation.length - 1];
+        const liveMsg = { role: 'assistant', content: liveStreamState.partialText, providerName: liveStreamState.node.name };
+        snapshotConversation = (last && last.role === 'assistant')
+          ? [...conversation.slice(0, -1), liveMsg]
+          : [...conversation, liveMsg];
+      }
+      const title = aiGeneratedTitles.get(currentConvId) || titleFromConversation(snapshotConversation);
+      const blob = new Blob([JSON.stringify({ title, messages: snapshotConversation })], { type: 'application/json' });
+      navigator.sendBeacon('/api/conversations/' + encodeURIComponent(currentConvId) + '/beacon', blob);
+    } catch (e) { /* laatste redmiddel — als dit ook faalt, is er niets meer aan te doen */ }
   });
 
   // init: check of er al een geldige sessie is

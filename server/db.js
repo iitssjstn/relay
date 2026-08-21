@@ -51,6 +51,19 @@ db.exec(`
     updated_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_memory_entries_user ON memory_entries(user_id);
+
+  -- Wie deed welke beheerdersactie, wanneer, en op wie/wat gericht. Puur
+  -- een logboek — nooit via de app zelf te wijzigen of verwijderen.
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_username TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    details TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
 `);
 
 // Migratie: 'memory' kolom toevoegen aan bestaande installaties die 'm nog

@@ -1,0 +1,10 @@
+node_modules
+server/node_modules
+relay-data
+data
+.git
+.gitignore
+.env
+*.log
+npm-debug.log*
+.DS_Store
