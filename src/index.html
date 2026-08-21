@@ -4167,7 +4167,18 @@
           partialEntryIndex = -1;
           saveCurrentConversation();
         }
-        streamHandle.remove();
+        // Was er al zichtbare tekst binnengekomen vóórdat de fout optrad
+        // (bv. een netwerkstoring halverwege het typen)? Dan die tekst
+        // niet zomaar laten verdwijnen — dat oogt alsof het antwoord in
+        // het niets oploste. Toon 'm nog even, duidelijk gemarkeerd als
+        // afgebroken, in plaats van de hele bubbel weg te poetsen. Was er
+        // nog he-le-maal niets binnengekomen, dan is er ook niets om te
+        // laten zien — dan gewoon de lege bubbel weghalen zoals voorheen.
+        if (partialSoFar.trim()) {
+          streamHandle.finish(partialSoFar.trim() + '\n\n*⚠ Antwoord afgebroken — ' + node.name + ' gaf halverwege een fout (' + err.message + ').*');
+        } else {
+          streamHandle.remove();
+        }
         if (err.isContextLimit) {
           const handedOff = handOffToNext(node, 'contextlimiet bereikt bij ' + node.name);
           if (!handedOff) {

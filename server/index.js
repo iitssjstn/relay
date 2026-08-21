@@ -909,12 +909,18 @@ app.post('/api/relay-proxy', requireAuth, async (req, res) => {
     res.end();
   } catch (e) {
     // Headers al verstuurd (bv. streaming was al bezig toen het misging)?
-    // Dan kan er geen nette JSON-foutmelding meer bij — gewoon afsluiten
-    // i.p.v. crashen op "Cannot set headers after they are sent".
+    // Dan kan er geen nette JSON-foutmelding meer bij. BELANGRIJK: hier
+    // NIET res.end() gebruiken — dat sluit de verbinding "netjes" af, en
+    // de browser ziet dat dan als een GESLAAGD, compleet antwoord (het
+    // tot dan toe getypte stuk tekst wordt zo stilzwijgend het "definitieve"
+    // antwoord, zonder dat er ooit een fout werd getoond). res.destroy()
+    // breekt de verbinding abrupt af, wat de browser wél als een echte
+    // netwerkfout herkent — zodat de voorkant dit correct als mislukking
+    // afhandelt (inclusief de handoff naar de volgende AI in de ketting).
     if (!res.headersSent) {
       res.status(502).json({ error: 'Kon de AI-provider niet bereiken: ' + e.message });
     } else if (!res.writableEnded) {
-      res.end();
+      res.destroy(e);
     }
   }
 });
