@@ -153,6 +153,7 @@
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
   .project-file-row-meta{ font-size:10.5px; color: var(--text-faint); flex-shrink:0; }
+  .project-file-row-action{ flex-shrink:0; }
   .project-file-list-toolbar{
     display:flex; gap:8px; margin-bottom:10px;
   }
@@ -2778,12 +2779,26 @@
     listEl.innerHTML = '<div class="project-file-list-empty">Laden...</div>';
     try {
       const files = await apiFetch('/api/projects/' + encodeURIComponent(currentProjectId) + '/files');
-      if (!files.length) {
-        listEl.innerHTML = '<div class="project-file-list-empty">Nog geen bestanden in dit project — die verschijnen hier zodra de AI iets aanmaakt in een gesprek dat aan dit project gekoppeld is.</div>';
-        return;
-      }
       const toolbar = document.createElement('div');
       toolbar.className = 'project-file-list-toolbar';
+
+      const deleteProjectBtn = document.createElement('button');
+      deleteProjectBtn.type = 'button';
+      deleteProjectBtn.className = 'ghost-btn';
+      deleteProjectBtn.textContent = '🗑 Map verwijderen';
+      deleteProjectBtn.title = 'Verwijder dit project en alle bestanden erin';
+      deleteProjectBtn.addEventListener('click', () => deleteProject(currentProjectId, currentProjectName));
+      toolbar.appendChild(deleteProjectBtn);
+
+      if (!files.length) {
+        listEl.innerHTML = '';
+        listEl.appendChild(toolbar);
+        const emptyMessage = document.createElement('div');
+        emptyMessage.className = 'project-file-list-empty';
+        emptyMessage.textContent = 'Nog geen bestanden in dit project — die verschijnen hier zodra de AI iets aanmaakt in een gesprek dat aan dit project gekoppeld is.';
+        listEl.appendChild(emptyMessage);
+        return;
+      }
 
       const hasHtmlEntry = files.some(f => f.path.toLowerCase() === 'index.html') || files.some(f => /\.html?$/i.test(f.path));
       if (hasHtmlEntry) {
@@ -3679,10 +3694,14 @@
         projects.forEach(p => {
           const row = document.createElement('div');
           row.className = 'project-file-row';
-          row.innerHTML = `<span class="project-file-row-name">📁 ${escapeHtml(p.name)}</span><span class="project-file-row-meta">${p.fileCount} bestand${p.fileCount === 1 ? '' : 'en'}</span>`;
+          row.innerHTML = `<span class="project-file-row-name">📁 ${escapeHtml(p.name)}</span><span class="project-file-row-meta">${p.fileCount} bestand${p.fileCount === 1 ? '' : 'en'}</span><button type="button" class="code-file-btn project-file-row-action" title="Map verwijderen" aria-label="Map verwijderen">🗑</button>`;
           row.addEventListener('click', async () => {
             await linkConversationToProject(p.id, p.name);
             $('projectPickerOverlay').style.display = 'none';
+          });
+          row.querySelector('.project-file-row-action').addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteProject(p.id, p.name);
           });
           $('projectPickerList').appendChild(row);
         });
@@ -3690,6 +3709,24 @@
     } catch (e) {
       $('projectPickerList').innerHTML = '';
       $('projectPickerListWrap').style.display = 'none';
+    }
+  }
+
+  async function deleteProject(projectId, projectName){
+    if (!confirm('Map "' + projectName + '" en alle bestanden erin verwijderen? Dit kan niet ongedaan worden gemaakt.')) return;
+    try {
+      await apiFetch('/api/projects/' + encodeURIComponent(projectId), { method: 'DELETE' });
+      if (currentProjectId === projectId) {
+        currentProjectId = null;
+        currentProjectName = null;
+        currentProjectFilesCache = [];
+        updateProjectButton();
+        closeArtifactPanel();
+      }
+      showToast('Map verwijderd.', 'info');
+      if ($('projectPickerOverlay').style.display !== 'none') await openProjectPicker();
+    } catch (e) {
+      showToast('Map verwijderen mislukt: ' + e.message);
     }
   }
 
