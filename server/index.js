@@ -398,13 +398,18 @@ app.delete('/api/projects/:id/files/*', requireAuth, requireOwnedProject, (req, 
 
 app.get('/api/nodes', requireAuth, (req, res) => {
   const row = db.prepare('SELECT config FROM node_configs WHERE user_id = ?').get(req.user.uid);
-  res.json(row ? JSON.parse(row.config) : { nodes: [], activeIndex: -1 });
+  res.json(row ? JSON.parse(row.config) : { nodes: [], activeIndex: -1, strategy: 'priority' });
 });
 
 app.put('/api/nodes', requireAuth, (req, res) => {
-  const { nodes, activeIndex } = req.body || {};
+  const { nodes, activeIndex, strategy } = req.body || {};
   if (!Array.isArray(nodes)) return res.status(400).json({ error: 'nodes moet een array zijn.' });
-  const config = JSON.stringify({ nodes, activeIndex: typeof activeIndex === 'number' ? activeIndex : -1 });
+  const allowedStrategies = ['priority', 'round-robin', 'random', 'least-used'];
+  const config = JSON.stringify({
+    nodes,
+    activeIndex: typeof activeIndex === 'number' ? activeIndex : -1,
+    strategy: allowedStrategies.includes(strategy) ? strategy : 'priority'
+  });
   const existing = db.prepare('SELECT user_id FROM node_configs WHERE user_id = ?').get(req.user.uid);
   if (existing) {
     db.prepare('UPDATE node_configs SET config = ? WHERE user_id = ?').run(config, req.user.uid);
