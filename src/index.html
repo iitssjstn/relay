@@ -1156,12 +1156,25 @@
     </div>
 
     <div class="sidebar-tab-panel" id="tabPanelChain" style="display:none;">
+      <label style="display:block; font-size:12px; opacity:.7; margin-bottom:4px;" for="chainStrategySelect">Routeringsstrategie</label>
+      <select id="chainStrategySelect" class="ghost-btn" style="width:100%; margin-bottom:12px;">
+        <option value="priority">Prioriteit (huidig gedrag — altijd de hoogste beschikbare AI)</option>
+        <option value="round-robin">Round-robin (om de beurt)</option>
+        <option value="random">Willekeurig</option>
+        <option value="least-used">Minst gebruikt deze sessie</option>
+      </select>
       <div id="nodeList"></div>
       <button class="add-node-btn" id="addNodeBtn">+ AI toevoegen aan de ketting</button>
       <div style="display:flex; gap:8px; width:100%; margin-top:14px;">
         <button class="ghost-btn" id="exportBtn">Exporteer config</button>
         <button class="ghost-btn" id="importBtn">Importeer config</button>
         <input type="file" id="importFile" accept="application/json" style="display:none">
+      </div>
+      <div style="font-size:11px; opacity:.55; margin-top:8px; line-height:1.5;">
+        De strategie bepaalt welke AI een <em>nieuwe</em> beurt start. Faalt
+        die AI halverwege (contextlimiet, rate limit, fout), dan schakelt
+        Relay binnen die beurt altijd gewoon door naar de volgende in de
+        lijst, ongeacht de gekozen strategie.
       </div>
     </div>
 
@@ -1571,6 +1584,14 @@
 
   let nodes = [];          // {id, provider, name, model, apiKey, baseUrl, maxTokens, maxOutput, status}
   let activeIndex = -1;    // index in nodes[] currently handling the conversation
+  // Bepaalt WELKE gezonde AI een nieuwe beurt begint — losstaand van de
+  // handoff-logica binnen één beurt (die blijft altijd gewoon de ketting
+  // aflopen zodra de actieve AI faalt). 'priority' = huidig gedrag (altijd
+  // de hoogste AI die niet afkoelt), 'round-robin' = om de beurt,
+  // 'random' = willekeurig, 'least-used' = de AI met de minste beurten
+  // deze sessie — vergelijkbaar met OmniRoute's routing-strategieën.
+  let chainStrategy = 'priority';
+  let roundRobinCursor = -1;
   let conversation = [];   // {role: 'user'|'assistant', content, images?: [dataUrl,...]}
   let editingId = null;
   let sending = false;
@@ -2142,10 +2163,11 @@
   }
 
   async function saveNodes(){
-    // coolDownUntil en rateLimitInfo zijn puur tijdelijke, lokale hints voor
-    // deze sessie — horen niet in de opgeslagen server-config terecht te komen.
-    const cleanNodes = nodes.map(({ coolDownUntil, rateLimitInfo, ...rest }) => rest);
-    try { await apiFetch('/api/nodes', { method: 'PUT', body: { nodes: cleanNodes, activeIndex } }); }
+    // coolDownUntil, rateLimitInfo en de sessietellers zijn puur tijdelijke,
+    // lokale hints — horen niet in de opgeslagen server-config terecht te
+    // komen.
+    const cleanNodes = nodes.map(({ coolDownUntil, rateLimitInfo, consecutiveFailures, callCount, successCount, failCount, ...rest }) => rest);
+    try { await apiFetch('/api/nodes', { method: 'PUT', body: { nodes: cleanNodes, activeIndex, strategy: chainStrategy } }); }
     catch (e) { console.error('Instellingen opslaan mislukt:', e.message); showToast('Kon je AI-instellingen niet opslaan — controleer je verbinding.'); }
   }
 
@@ -2162,8 +2184,11 @@
   async function loadNodesFromServer(){
     try {
       const data = await apiFetch('/api/nodes');
-      nodes = (data.nodes || []).map(n => ({ ...n, status: 'queued', rateLimitInfo: null }));
+      nodes = (data.nodes || []).map(n => ({ ...n, status: 'queued', rateLimitInfo: null, callCount: 0, successCount: 0, failCount: 0 }));
       activeIndex = typeof data.activeIndex === 'number' ? data.activeIndex : (nodes.length ? 0 : -1);
+      chainStrategy = ['priority', 'round-robin', 'random', 'least-used'].includes(data.strategy) ? data.strategy : 'priority';
+      const strategySelect = $('chainStrategySelect');
+      if (strategySelect) strategySelect.value = chainStrategy;
     } catch (e) { /* auth redirect already handled inside apiFetch */ }
   }
 
@@ -2424,6 +2449,7 @@
         : 'klik om deze AI te gebruiken';
       el.title = i === activeIndex ? '' : 'Klik om over te schakelen naar ' + node.name;
       const quotaHtml = formatQuotaLine(node.rateLimitInfo);
+      const statsHtml = node.callCount ? `<div class="node-quota" style="opacity:.6;">${node.successCount || 0}✓ · ${node.failCount || 0}✗ deze sessie</div>` : '';
       el.innerHTML = `
         <div class="node-connector"></div>
         <div class="node-top">
@@ -2433,6 +2459,7 @@
         <div class="node-provider">${node.provider}</div>
         <div class="node-model">${escapeHtml(node.model || '(geen model ingesteld)')}</div>
         ${quotaHtml}
+        ${statsHtml}
         <div class="node-meta">
           <span class="node-status-text">${statusText}</span>
           <span class="node-actions">
@@ -3568,6 +3595,12 @@
     $('toggleKeyBtn').textContent = f.type === 'password' ? 'toon' : 'verberg';
   });
   $('addNodeBtn').addEventListener('click', () => openModal(null));
+  $('chainStrategySelect').addEventListener('change', (e) => {
+    chainStrategy = e.target.value;
+    roundRobinCursor = -1;
+    saveNodes();
+    showToast('Routeringsstrategie: ' + e.target.options[e.target.selectedIndex].text.split(' (')[0]);
+  });
   $('modalCancelBtn').addEventListener('click', closeModal);
   $('modalOverlay').addEventListener('click', (e) => { if (e.target.id === 'modalOverlay') closeModal(); });
 
@@ -4012,6 +4045,14 @@
     // blokkeert zonder dat er ook maar één keer echt geprobeerd is.
     let anyRealAttemptMade = false;
 
+    // Bepaalt welke AI deze NIEUWE beurt start, volgens de gekozen
+    // routeringsstrategie. Faalt die AI halverwege, dan loopt de
+    // bestaande handoff-logica verderop gewoon de rest van de ketting af,
+    // ongeacht deze keuze.
+    pickTurnStartNode();
+    if (nodes[activeIndex]) nodes[activeIndex].status = 'queued';
+    renderNodes();
+
     let attempts = 0;
     while (attempts < nodes.length) {
       const node = nodes[activeIndex];
@@ -4042,6 +4083,7 @@
       }
 
       node.status = 'active';
+      node.callCount = (node.callCount || 0) + 1;
       renderNodes();
       const streamHandle = beginStreamingMessage(node.name);
       anyRealAttemptMade = true;
@@ -4136,6 +4178,8 @@
         }
         node.status = 'done';
         node.coolDownUntil = null;
+        node.consecutiveFailures = 0;
+        node.successCount = (node.successCount || 0) + 1;
         currentAbortController = null;
         // Bestanden die de AI via de create_files-tool doorgaf, apart
         // meesturen bij het bericht (net als images/files bij een
@@ -4225,8 +4269,13 @@
           attempts++;
           continue;
         } else if (err.isRateLimit) {
-          node.coolDownUntil = Date.now() + 60000; // 60s afkoelen voordat we 'm weer proberen
-          const handedOff = handOffToNext(node, 'rate limit bereikt bij ' + node.name + ' (60s afkoelen)', 'cooldown');
+          node.consecutiveFailures = (node.consecutiveFailures || 0) + 1;
+          node.failCount = (node.failCount || 0) + 1;
+          const providerSeconds = parseProviderResetSeconds(node.rateLimitInfo && node.rateLimitInfo.resetIn);
+          const cooldownMs = providerSeconds != null ? Math.max(1000, providerSeconds * 1000) : computeBackoffMs(node);
+          node.coolDownUntil = Date.now() + cooldownMs;
+          const cooldownLabel = cooldownMs >= 60000 ? Math.round(cooldownMs / 60000) + 'm' : Math.round(cooldownMs / 1000) + 's';
+          const handedOff = handOffToNext(node, 'rate limit bereikt bij ' + node.name + ' (' + cooldownLabel + ' afkoelen)', 'cooldown');
           if (!handedOff) {
             addMessage('system', 'Alle AI\'s in de ketting zitten (tijdelijk) tegen een limiet aan. Probeer het zo weer, of voeg een extra AI toe.', { cls: 'err' });
             break;
@@ -4234,6 +4283,9 @@
           attempts++;
           continue;
         } else {
+          node.consecutiveFailures = (node.consecutiveFailures || 0) + 1;
+          node.failCount = (node.failCount || 0) + 1;
+          node.coolDownUntil = Date.now() + computeBackoffMs(node);
           node.status = 'error';
           renderNodes();
           addMessage('system', node.name + ' gaf een fout: ' + err.message, { cls: 'err' });
@@ -4252,6 +4304,68 @@
     }
     sending = false;
     updateComposerState();
+  }
+
+  // OmniRoute-achtige exponentiële cooldown: elke opeenvolgende mislukking
+  // bij dezelfde AI verdubbelt de afkoeltijd (5s, 10s, 20s, ... max 5 min).
+  // Zo blijft een structureel kapotte AI (bv. verlopen sleutel) niet bij
+  // ieder bericht opnieuw meteen geprobeerd worden, maar krijgt een AI die
+  // maar één keer hapert na een korte pauze alweer een nieuwe kans.
+  function isNodeHealthy(node){
+    return !node.coolDownUntil || Date.now() >= node.coolDownUntil;
+  }
+
+  // Kiest, volgens chainStrategy, welke AI een nieuwe beurt start —
+  // Relay's kleine tegenhanger van OmniRoute's routeringsstrategieën.
+  // Zijn alle AI's aan het afkoelen, dan valt elke strategie terug op de
+  // volledige lijst (incl. koelende AI's); de bestaande cooldown-skip
+  // ín de beurt zelf lost dat verder op.
+  function pickTurnStartNode(){
+    if (!nodes.length) return;
+    const allIdx = nodes.map((n, i) => i);
+    const healthyIdx = allIdx.filter(i => isNodeHealthy(nodes[i]));
+    const pool = healthyIdx.length ? healthyIdx : allIdx;
+
+    if (chainStrategy === 'round-robin') {
+      let next = roundRobinCursor;
+      for (let step = 0; step < nodes.length; step++) {
+        next = (next + 1) % nodes.length;
+        if (pool.includes(next)) { roundRobinCursor = next; activeIndex = next; return; }
+      }
+      activeIndex = pool[0];
+      roundRobinCursor = activeIndex;
+      return;
+    }
+    if (chainStrategy === 'random') {
+      activeIndex = pool[Math.floor(Math.random() * pool.length)];
+      return;
+    }
+    if (chainStrategy === 'least-used') {
+      activeIndex = pool.reduce((best, i) => (nodes[i].callCount || 0) < (nodes[best].callCount || 0) ? i : best, pool[0]);
+      return;
+    }
+    // 'priority' (default): altijd de hoogst-geprioriteerde gezonde AI —
+    // "lazy recovery": pas terugschakelen als een AI daadwerkelijk weer
+    // aan de beurt komt, niet met een aparte achtergrondtimer.
+    activeIndex = pool[0];
+  }
+
+  function computeBackoffMs(node){
+    const base = 5000, max = 300000;
+    return Math.min(max, base * Math.pow(2, Math.max(0, (node.consecutiveFailures || 0) - 1)));
+  }
+
+  // Leest, waar mogelijk, de door de provider zélf opgegeven reset-tijd
+  // (bv. "13s", "6m0s", of een kaal aantal seconden) — betrouwbaarder dan
+  // gokken, want de provider weet precies wanneer het quotum weer opent.
+  // Onherkenbaar of ontbrekend? Dan valt de aanroeper terug op de
+  // exponentiële afkoeltijd hierboven.
+  function parseProviderResetSeconds(resetIn){
+    if (!resetIn) return null;
+    if (/^\d+(\.\d+)?$/.test(resetIn)) return Number(resetIn);
+    const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/.exec(String(resetIn).trim());
+    if (!m || (!m[1] && !m[2] && !m[3])) return null;
+    return (Number(m[1] || 0) * 3600) + (Number(m[2] || 0) * 60) + Number(m[3] || 0);
   }
 
   function handOffToNext(currentNode, reason, statusLabel){
